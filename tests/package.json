@@ -1,7 +1,8 @@
 {
   "name": "portfolio-ledger-tests",
   "private": true,
-  "description": "Browser test for portfolio-ledger.html with a mocked, empty database and a made-up broker export.",
+  "description": "Browser test for portfolio-ledger.html with a mocked, empty database and made-up broker exports (.xlsx and .csv).",
+  "license": "MIT",
   "scripts": {
     "fixture": "node make-fake-export.js",
     "test": "node check-page.js"

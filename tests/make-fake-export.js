@@ -1,5 +1,6 @@
 // Builds a small, completely made-up broker export in the layout Saxo Bank uses
-// (Dutch headers, three sheets: "Transacties", "_Transacties" and "Bookings").
+// (Dutch headers, three sheets: "Transacties", "_Transacties" and "Bookings"), plus the main
+// sheet on its own as a .csv file.
 // Every name, symbol, ISIN, account and amount in it is invented.
 //
 //   node tests/make-fake-export.js [out.xlsx]
@@ -87,3 +88,13 @@ XLSX.utils.book_append_sheet(wb, sheet(bookHeader, bookings), 'Bookings');
 fs.mkdirSync(path.dirname(out), { recursive: true });
 fs.writeFileSync(out, XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' }));
 console.log('wrote', out);
+
+// The same main sheet as a CSV file, the way European brokers often write one: semicolons between
+// fields, day-month-year dates and amounts like 10.000,00. Only the main sheet: a CSV has one table.
+const csvOut = out.replace(/\.xlsx$/i, '.csv');
+const iso = c => { const d = new Date(Date.UTC(1899, 11, 30) + Math.round(c.v * 864e5)); return d.toISOString().slice(0, 10).split('-').reverse().join('-'); };
+const eur = v => { const [i, f] = Math.abs(v).toFixed(2).split('.'); return (v < 0 ? '-' : '') + i.replace(/\B(?=(\d{3})+(?!\d))/g, '.') + ',' + f; };
+const field = v => { const s = v === undefined ? '' : typeof v === 'object' ? iso(v) : typeof v === 'number' ? (Number.isInteger(v) && Math.abs(v) < 1000 ? String(v) : eur(v)) : String(v);
+  return /[;"\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+fs.writeFileSync(csvOut, '\uFEFF' + [mainHeader, ...main].map(r => r.map(field).join(';')).join('\r\n') + '\r\n');
+console.log('wrote', csvOut);

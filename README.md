@@ -1,7 +1,7 @@
 # Portfolio Ledger
 
-A personal investment tracker that runs as a private page on claude.ai. You import the Excel
-export of your broker's transactions, and the page shows:
+A personal investment tracker that runs as a private page on claude.ai. You import the Excel or
+CSV export of your broker's transactions, and the page shows:
 
 - your positions and cash;
 - your returns compared with market indices;
@@ -21,7 +21,8 @@ import stays in your copy only.
 |---|---|
 | `portfolio-ledger.html` | The whole app: one page, published as a claude.ai artifact. |
 | `refresh/` | Optional. The daily price refresh: a script plus instructions for a Claude Code scheduled task. |
-| `tests/` | A browser test, and a script that makes a small, made-up Saxo-style export to test with. |
+| `tests/` | A browser test, and a script that makes a small, made-up Saxo-style export (`.xlsx` and `.csv`) to test with. |
+| `LICENSE` | The MIT license: you may use, change and share this code. |
 
 ## 1. Publish your own copy
 
@@ -45,6 +46,10 @@ You need a claude.ai account where you can use Claude Code, either on the web at
 4. Claude replies with a link that looks like `https://claude.ai/artifact/...`. That is your
    tracker. Keep the link, because you need it to update the page later and to set up the price
    refresh.
+
+If you set up the price refresh later, a third capability lets the page start it right after each
+import (see [Start the refresh right after an import](#start-the-refresh-right-after-an-import)).
+You don't need it to begin.
 
 **What the two capabilities do**
 
@@ -77,7 +82,8 @@ portfolio-ledger.html to my tracker <your link>."* Your imports and settings are
 ## 2. Your first import
 
 1. Open your tracker. It says **No transactions yet**.
-2. Click **Go to Transactions**, then **Import export**, and choose your broker's `.xlsx` file.
+2. Click **Go to Transactions**, then **Import export**, and choose your broker's `.xlsx` or
+   `.csv` file.
    You can also drop the file on the import area under **Imports & columns**.
 3. The file is read in your browser, and only the columns it keeps are saved. A status line
    tells you which columns were left out.
@@ -88,7 +94,13 @@ Good to know:
   such as a user name or account number: delete the contents but keep the column title. The
   import leaves that column out and adds it to the **Never imported** list, so later files skip
   it too. Columns your broker always leaves empty are kept, and you can manage the list on the
-  same screen.
+  same screen. This works for Excel files only: a CSV file can't tell an emptied column from one
+  the broker leaves empty, so a CSV import keeps every column. Put a column on the list yourself
+  to leave it out of CSV files.
+- **CSV files.** Fields may be separated by semicolons or commas, and the first line must hold
+  the column titles. A CSV file has one table, which is read as the main list of transactions.
+  Dates may look like `15-06-2026`, `15/06/2026` or `2026-06-15`, and amounts like `1.234,56` or
+  `1,234.56`.
 - **Newer exports.** Importing a newer export replaces the rows in the period it covers, so
   overlapping files don't create duplicates. The period comes from the file name when it
   contains two dates, like `..._2026-01-01_2026-06-30.xlsx`, and from the dates inside
@@ -121,8 +133,9 @@ Then ask Claude to republish the page to your tracker's link (see above).
 Everything below is in `portfolio-ledger.html`. Line numbers are approximate; searching for the
 name always works.
 
-1. **The first row of every sheet must hold the column titles.** If your broker puts a title or
-   a blank row above them, the import needs a small change in `readWorkbook` (around line 1941).
+1. **The first row of every sheet (in a CSV file, the first line) must hold the column titles.**
+   If your broker puts a title or a blank row above them, the import needs a small change in
+   `readWorkbook` (around line 1947).
 2. **Each sheet gets a role from its name** (`sheetRole`, around line 426):
    - a name starting with `_`, like Saxo's `_Transacties`, holds trade details (quantity, price,
      order type);
@@ -163,9 +176,10 @@ name always works.
 
 4. **Which columns are left out: `cleanSheet`** (around line 415). It drops columns on the
    never-import list and columns whose cells were all emptied in the file. It keeps columns
-   where the broker itself wrote empty text or "-". `cellValue` (around line 1933) is where
-   Excel cells, including dates, become values.
-5. **What kind of transaction a row is** comes from words in the description (around line 520):
+   where the broker itself wrote empty text or "-". `cellValue` (around line 1939) is where
+   Excel cells, including dates, become values. A CSV file is read as text, so its dates and
+   amounts are read by `day` and `num` in the core script.
+5. **What kind of transaction a row is** comes from words in the description (around line 522):
 
    | Kind | Words |
    |---|---|
@@ -180,14 +194,14 @@ name always works.
    "transact" or "trade" counts as a buy or sell, depending on the sign of the quantity. Add
    your broker's words here if they differ.
 6. **Quantity and price** come from the trade details sheet. Without one, they come from the
-   description, in the form "Koop 20 @ 100,00 USD" (`parseAction`, around line 465). A broker
+   description, in the form "Koop 20 @ 100,00 USD" (`parseAction`, around line 467). A broker
    with Quantity and Price columns on the main sheet needs a small change in `buildEvents`
-   (around line 503). The second example prompt above asks for exactly that.
-7. **Dividend tax lines** are recognised in `dividendInfo` (around line 566): "Bronbelasting"
+   (around line 505). The second example prompt above asks for exactly that.
+7. **Dividend tax lines** are recognised in `dividendInfo` (around line 568): "Bronbelasting"
    or "withholding" is foreign tax, and "Roerende voorheffing" is the Belgian tax.
 8. **The upload screen** (drop area, status line, the Never imported lists, the list of past
-   imports) is built in `importPanelHTML` (around line 1851). The saving itself happens in
-   `importFile` (around line 1957).
+   imports) is built in `importPanelHTML` (around line 1857). The saving itself happens in
+   `importFile` (around line 1964).
 
 ### Other things you may want to change
 
@@ -200,9 +214,12 @@ name always works.
 
 ### Known limitations
 
-- Numbers stored in Excel as **text** with both a thousands separator and a decimal comma, like
-  `"1.234,56"`, are read wrongly, and so are quantities like "1.000" in a description. Real
-  Excel numbers are fine, and Saxo uses those for its amounts.
+- Numbers written as **text** (every number in a CSV file, and quantities in a description) use
+  the last `.` or `,` as the decimal mark, so `1.234,56` and `1,234.56` both work. A number with
+  one separator only, like `1.000` or `1,000`, is read as a decimal: 1. Real Excel numbers are
+  not affected, and Saxo's Excel export uses those for its amounts.
+- Dates written as text are read day first. A CSV file with month-first dates, like
+  `06/15/2026`, needs a change in `day` in the core script.
 - The Excel reader is SheetJS 0.18.5, loaded from cdnjs. It is the newest version cdnjs offers
   and has published security advisories, fixed in later versions that are only available from
   SheetJS's own site. Only import files you downloaded from your broker.
@@ -245,6 +262,39 @@ the benchmarks and the currencies you use, and writes them back. It never change
    in CLAUDE.md and change nothing else."* If you choose Tuesday to Saturday instead, Friday's
    closing prices arrive on Saturday rather than on Monday.
 
+### Start the refresh right after an import
+
+Without this, a new instrument gets its price, logo and sector at the next scheduled run. With
+it, the page starts your scheduled task itself right after each import, and the prices arrive
+within a few minutes.
+
+1. In a Claude Code session, send: *"Find my price refresh scheduled task and write its id to my
+   tracker <your link>, in the document `settings/refresh`, field `trigger`."* The id looks like
+   `trig_...`.
+2. Republish the page with a third capability: the Claude Code Remote connector, limited to
+   the one tool that starts a scheduled task. Send: *"Republish portfolio-ledger.html to my
+   tracker <your link> with these capabilities:"* and paste:
+
+   ```json
+   {"db": {"rules": [{"path": "", "read": "view", "write": "admin"}]}, "user": {}, "mcp": {"servers": [{"server": "Claude Code Remote", "tools": ["fire_trigger"]}]}}
+   ```
+
+3. Import a file. The first time, claude.ai asks whether the page may use Claude Code Remote.
+   Allow it. The header then says **Refreshing prices…** until the new prices arrive, for at
+   most 30 minutes.
+
+Good to know:
+
+- **Only the owner starts it.** When an editor imports, prices follow at the next scheduled run.
+- **What the page may do.** The connector lets the page start a scheduled task, and nothing
+  else: it can't read, change or create scheduled tasks. The page starts only the task named
+  in `settings/refresh`. Each start is one run of that task, like the daily one.
+- **When it can't start.** The status line under the import says why (the connector isn't
+  connected or allowed, or the task was deleted), and the prices follow at the next scheduled
+  run. Your import is saved either way.
+- **Prices during the day.** A run while a market is open stores that day's latest price. The
+  next scheduled run replaces it with the closing price.
+
 How the refresh matches instruments: it turns the broker's symbol, such as `EXRB:xnas`, into a
 Yahoo Finance symbol using the exchange table `EXCH` in `refresh.py`. If that fails, it searches
 Yahoo by ISIN and by name. It accepts a match only when the price on your trade date is within
@@ -283,7 +333,8 @@ npm test
 ```
 
 `npm run fixture` writes a small, made-up Saxo-style export to `tests/fixtures/`. It has three
-sheets, invented companies and an emptied column. `npm test` opens the page in a real browser,
+sheets, invented companies and an emptied column. The same main sheet is also written as a
+semicolon CSV file, with day-month-year dates and amounts like `10.000,00`. `npm test` opens the page in a real browser,
 with a fake database standing in for claude.ai's, and checks that:
 
 - the page shows **Sign in to see your portfolio** without a database, including when opened as
@@ -295,6 +346,12 @@ with a fake database standing in for claude.ai's, and checks that:
 - the transactions, dividends with their tax lines, positions, cash, the Performance and
   Dividends pages, and the phone layout all work;
 - importing the same file again creates no duplicates;
+- the CSV file gives the same transactions, positions and cash;
+- with `settings/refresh` set, an import starts the scheduled task once, through a stand-in for
+  the Claude Code Remote connector (nothing is sent), and the header says **Refreshing prices…**
+  until the refresh has written new prices;
+- the refresh is not started, and the status line says why, when the connector is missing, not
+  allowed or not connected, or when the person importing is not the owner;
 - no outside server is contacted. The two libraries are answered from `node_modules`.
 
 Screenshots go to `tests/out/`. To test your own broker's layout, add made-up rows in that
@@ -314,3 +371,8 @@ echo '{}' > /tmp/ledger-versions.json
 ```bash
 python3 -I ../refresh/refresh.py /tmp/ledger-dump /tmp/ledger-versions.json /tmp/ledger-out
 ```
+
+## License
+
+MIT. See [LICENSE](LICENSE). You may use, change and share this code, including in your own
+published copy.

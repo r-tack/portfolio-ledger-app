@@ -395,7 +395,7 @@ details.imports > summary::-webkit-details-marker { display: none; }
   <section class="view" id="view-transactions" hidden></section>
 </main>
 <div id="sheet-root" class="backdrop" hidden></div>
-<input type="file" id="imp-file" accept=".xlsx,.xls" hidden>
+<input type="file" id="imp-file" accept=".xlsx,.xls,.csv" hidden>
 <div id="tip" hidden></div>
 <svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><filter id="pv-blur" x="-50%" y="-100%" width="200%" height="300%" color-interpolation-filters="sRGB"><feGaussianBlur stdDeviation="0"/></filter></svg>
 
@@ -445,7 +445,9 @@ window.Core = (() => {
   const num = v => {
     if (v == null) return null; if (typeof v === 'number') return isFinite(v) ? v : null;
     const m = String(v).replace(/\s/g, '').match(/-?[\d.,]+/); if (!m) return null;
-    let s = m[0]; if (s.includes(',') && s.includes('.')) s = s.replace(/,/g, ''); else if (s.includes(',')) s = s.replace(',', '.');
+    let s = m[0]; const nc = (s.match(/,/g) || []).length, nd = (s.match(/\./g) || []).length;
+    if (nc && nd) s = s.lastIndexOf(',') > s.lastIndexOf('.') ? s.replace(/\./g, '').replace(',', '.') : s.replace(/,/g, '');
+    else if (nc > 1) s = s.replace(/,/g, ''); else if (nc) s = s.replace(',', '.'); else if (nd > 1) s = s.replace(/\./g, '');
     const n = parseFloat(s); return isFinite(n) ? n : null;
   };
   const MONTHS = { jan: 1, feb: 2, mar: 3, mrt: 3, maa: 3, apr: 4, may: 5, mei: 5, jun: 6, jul: 7, aug: 8, sep: 9, oct: 10, okt: 10, nov: 11, dec: 12 };
@@ -1013,7 +1015,11 @@ const findPos = key => { const m = getModel(); return m.open.find(p => p.symbol 
 function renderHeader() {
   $$('.tab').forEach(b => b.setAttribute('aria-current', b.dataset.route === S.ui.route ? 'page' : 'false'));
   const el = $('#asof');
-  if (S.meta && S.meta.pricesAsOf) {
+  const done = S.meta && Date.parse(S.meta.fetchedAt) >= S.refreshStarted - 60e3;
+  if (S.refreshStarted && !done && Date.now() - S.refreshStarted < REFRESH_WAIT) {
+    el.innerHTML = '<span class="dot stale"></span><span>Refreshing prices…</span>';
+    el.title = 'A price refresh was started after your import. New prices usually appear within a few minutes.';
+  } else if (S.meta && S.meta.pricesAsOf) {
     const age = C.daysBetween(S.meta.pricesAsOf, TODAY);
     el.innerHTML = `<span class="dot${age > 4 ? ' stale' : ''}"></span><span><span class="asof-lbl">Prices </span>${esc(dfmt(S.meta.pricesAsOf))}</span><span class="muted asof-src">· Yahoo Finance</span>`;
     el.title = age > 4 ? 'Prices are more than a few days old.' : 'Daily closing prices from Yahoo Finance';
@@ -1050,7 +1056,7 @@ function renderNoDb() {
   v.innerHTML = `<div class="panel empty"><h2>Sign in to see your portfolio</h2><p>This tracker keeps your transactions and prices in its own private database on claude.ai. Open it while signed in to load them.</p></div>`;
 }
 function renderEmpty(v) {
-  v.innerHTML = `<div class="panel empty"><h2>No transactions yet</h2><p>Import your broker's transaction export (.xlsx) on the Transactions page. Columns that are empty in the file are dropped before anything is saved.</p><button class="btn primary" id="go-import">Go to Transactions</button></div>`;
+  v.innerHTML = `<div class="panel empty"><h2>No transactions yet</h2><p>Import your broker's transaction export (.xlsx or .csv) on the Transactions page. Columns that are empty in the file are dropped before anything is saved.</p><button class="btn primary" id="go-import">Go to Transactions</button></div>`;
   $('#go-import', v).onclick = () => go('transactions');
 }
 
@@ -1861,8 +1867,8 @@ function importPanelHTML(m) {
   }).join('');
   return `<section class="panel"><details class="imports" ${store.get('impOpen', false) ? 'open' : ''} id="imp-details"><summary><span>Imports & columns</span><span class="small muted" style="font-weight:400">${imps.length} file${imps.length === 1 ? '' : 's'} · ${total} column${total === 1 ? '' : 's'} never imported ${IC.chev}</span></summary>
     <div style="display:grid;gap:16px;margin-top:14px">
-    <div class="drop" id="drop"><p><b>Drop a newer .xlsx export here.</b> The file is only opened in your browser. Columns you blanked out, and every column on the never-import list, are cut before anything is saved, even when a file has data in them. Overlapping dates replace the older import.</p></div>
-    <div id="imp-status" class="small ink2" role="status"></div>
+    <div class="drop" id="drop"><p><b>Drop a newer .xlsx or .csv export here.</b> The file is only opened in your browser. Columns you blanked out, and every column on the never-import list, are cut before anything is saved, even when a file has data in them. Overlapping dates replace the older import.</p></div>
+    <div id="imp-status" class="small ink2" role="status">${esc(S.ui.impStatus || '')}</div>
     <div style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;grid-template-columns:minmax(0,1fr);gap:12px">
       <div><h3 class="sub-h" style="margin:0">Never imported</h3><p class="small muted" style="margin:2px 0 0">A column you leave blank in an export is added here automatically. Columns that the broker itself leaves empty are kept.</p></div>
       ${never}
@@ -1938,7 +1944,7 @@ function cellValue(cell) {
   if (cell.t === 's') return String(cell.v ?? '').trim();
   return cell.v;
 }
-function readWorkbook(wb, exclude) {
+function readWorkbook(wb, exclude, csv) {
   const sheets = {}, dropped = {}, cleared = {}, columnCounts = {}; let minD = null, maxD = null;
   for (const name of wb.SheetNames) {
     const ws = wb.Sheets[name]; if (!ws || !ws['!ref']) continue;
@@ -1946,7 +1952,8 @@ function readWorkbook(wb, exclude) {
     for (let R = rg.s.r; R <= rg.e.r; R++) { const row = []; for (let Cc = rg.s.c; Cc <= rg.e.c; Cc++) row.push(cellValue(ws[XLSX.utils.encode_cell({ r: R, c: Cc })])); grid.push(row); }
     if (!grid.length) continue;
     const header = grid[0].map(C.normCol), body = grid.slice(1).filter(r => !r.every(C.isBlank));
-    const present = header.map((_, i) => body.some(r => r[i] !== undefined));
+    /* A CSV can't tell a column the user cleared from one the broker leaves empty: keep both. */
+    const present = csv ? null : header.map((_, i) => body.some(r => r[i] !== undefined));
     const role = C.sheetRole(name), res = C.cleanSheet(header, body, (exclude && exclude[role]) || [], present);
     sheets[name] = { columns: res.columns, rows: res.rows }; dropped[name] = res.dropped; cleared[name] = res.cleared; columnCounts[name] = header.length;
     const di = res.columns.findIndex(c => C.COLS.date.includes(c));
@@ -1957,15 +1964,17 @@ function readWorkbook(wb, exclude) {
 async function importFile(file) {
   if (S.ui.route !== 'transactions') go('transactions');
   store.set('impOpen', true);
-  const status = t => { const st = $('#imp-status'); if (st) st.textContent = t; else toast(t); };
+  const status = t => { S.ui.impStatus = t; const st = $('#imp-status'); if (st) st.textContent = t; else toast(t); };
   if (!S.db) { toast('Sign in on claude.ai to import.'); return; }
   if (S.readOnly) { toast('You can view this tracker but not import into it.'); return; }
-  if (!/\.xlsx?$/i.test(file.name)) { status('That file is not an Excel export (.xlsx). Export your transactions from the broker as Excel and try again.'); return; }
+  const csv = /\.csv$/i.test(file.name);
+  if (!csv && !/\.xlsx?$/i.test(file.name)) { status('That file is not an Excel (.xlsx) or CSV (.csv) export. Export your transactions from the broker as Excel or CSV and try again.'); return; }
   status('Reading ' + file.name + ' in your browser…');
   try { await loadXLSX(); } catch { status("The Excel reader couldn't be loaded. Check your connection and try again."); return; }
-  let wb; try { wb = XLSX.read(await file.arrayBuffer(), { type: 'array', cellNF: true, cellDates: false }); } catch { status("This file couldn't be read as Excel. Re-export it from your broker and try again."); return; }
+  let wb; try { wb = csv ? XLSX.read((await file.text()).replace(/^\uFEFF/, ''), { type: 'string', raw: true })
+    : XLSX.read(await file.arrayBuffer(), { type: 'array', cellNF: true, cellDates: false }); } catch { status(`This file couldn't be read as ${csv ? 'CSV' : 'Excel'}. Re-export it from your broker and try again.`); return; }
   const ex = (S.columns && S.columns.exclude) || {};
-  const { sheets, dropped, cleared, columnCounts, minD, maxD } = readWorkbook(wb, ex);
+  const { sheets, dropped, cleared, columnCounts, minD, maxD } = readWorkbook(wb, ex, csv);
   if (!Object.keys(sheets).some(n => C.sheetRole(n) === 'main')) { status("No transactions sheet was found in this file. Use the broker's transactions export."); return; }
   const fm = file.name.match(/(\d{4}-\d{2}-\d{2})_(\d{4}-\d{2}-\d{2})/);
   const period = fm ? { from: fm[1], to: fm[2] } : (minD ? { from: minD, to: maxD } : null);
@@ -1979,14 +1988,47 @@ async function importFile(file) {
   parts.push(cur);
   const totalDropped = Object.values(dropped).reduce((s, a) => s + a.length, 0);
   status(`Saving ${file.name}… ${totalDropped} column${totalDropped === 1 ? '' : 's'} left out.`);
+  let msg;
   try {
     for (let i = 0; i < parts.length; i++) await S.db.doc('imports/' + (i ? `${importId}-p${i + 1}` : importId)).set(Object.assign({}, base, parts[i], { part: i + 1, parts: parts.length }));
     const fresh = [];
     for (const [name, cols] of Object.entries(cleared)) { const role = C.sheetRole(name); for (const c of cols) if (!(ex[role] || []).includes(c)) fresh.push([role, c]); }
     for (const [role, c] of fresh) await saveColumns(role, c, true, true);
-    status(`Imported ${file.name}. Left out ${totalDropped} column${totalDropped === 1 ? '' : 's'}: ${Object.values(dropped).flat().join(', ') || 'none'}.${fresh.length ? ` ${fresh.length} newly blanked column${fresh.length === 1 ? ' was' : 's were'} added to the never-import list.` : ''}`);
-    toast('Import saved. New instruments get prices and logos at the next price refresh.');
-  } catch (e) { writeFailed(e); status("The import wasn't saved."); }
+    msg = `Imported ${file.name}. Left out ${totalDropped} column${totalDropped === 1 ? '' : 's'}: ${Object.values(dropped).flat().join(', ') || 'none'}.${fresh.length ? ` ${fresh.length} newly blanked column${fresh.length === 1 ? ' was' : 's were'} added to the never-import list.` : ''}`;
+    status(msg);
+  } catch (e) { writeFailed(e); status("The import wasn't saved."); return; }
+  const r = await startRefresh().catch(() => ({ toast: 'Import saved.', status: REFRESH_LATER }));
+  status(`${msg} ${r.status}`); toast(r.toast);
+}
+
+/* ---------- price refresh right after an import ----------
+   settings/refresh { trigger: "trig_..." } names the owner's price-refresh scheduled task. After each
+   import, the owner's page starts that task through the Claude Code Remote connector (the "mcp"
+   capability), so new instruments get prices and logos within minutes, not at the next scheduled run.
+   Without that document, or for anyone but the owner, prices follow at the next price refresh. */
+const REFRESH_SERVER = 'Claude Code Remote';
+const REFRESH_WAIT = 30 * 60e3;
+const REFRESH_LATER = 'New instruments get prices and logos at the next price refresh.';
+async function startRefresh() {
+  const trig = String((S.refreshCfg && S.refreshCfg.trigger) || '');
+  if (!/^trig_[A-Za-z0-9]+$/.test(trig) || !S.isOwner) return { toast: 'Import saved.', status: REFRESH_LATER };
+  let mcp = null; try { mcp = await window.claude.use('mcp'); } catch {}
+  if (!mcp) return { toast: 'Import saved. Price refresh not started.', status: `This page isn't allowed to use ${REFRESH_SERVER}, so the price refresh wasn't started. ${REFRESH_LATER}` };
+  toast('Import saved. Starting the price refresh…');
+  try {
+    await mcp.callTool(REFRESH_SERVER, 'fire_trigger', { trigger_id: trig, text: 'Started from the tracker page right after a new import, not by the schedule.' });
+    S.refreshStarted = Date.now(); setTimeout(scheduleRender, REFRESH_WAIT + 1000); scheduleRender();
+    return { toast: 'Import saved. Price refresh started.', status: 'The price refresh has started. New prices and logos usually appear within a few minutes.' };
+  } catch (e) {
+    const c = e && e.code;
+    const why = c === 'server_not_connected' ? `${REFRESH_SERVER} isn't connected to your claude.ai account (Settings → Connectors), so the price refresh wasn't started.`
+      : c === 'needs_reauth' ? `Reconnect ${REFRESH_SERVER} in claude.ai Settings → Connectors: the price refresh wasn't started.`
+      : ['not_in_manifest', 'approval_required', 'consent_required', 'not_granted', 'capability_disabled', 'blocked_by_policy'].includes(c) ? `${REFRESH_SERVER} isn't allowed for this page, so the price refresh wasn't started.`
+      : c === 'tool_error' ? "The price refresh scheduled task couldn't be started. Check that it still exists in Claude Code."
+      : c === 'server_unavailable' || c === 'upstream_error' || c === 'cancelled' ? "It isn't clear whether the price refresh started; if it did, new prices appear within a few minutes."
+      : "The price refresh couldn't be started.";
+    return { toast: 'Import saved. Price refresh not started.', status: `${why} ${REFRESH_LATER}` };
+  }
 }
 
 /* ---------- data wiring ---------- */
@@ -2003,6 +2045,7 @@ function subscribe() {
   db.doc('settings/strategies').onSnapshot(s => { S.strategies = s.exists ? (s.data().map || {}) : {}; S.dirty = true; scheduleRender(); }, () => {});
   db.doc('settings/columns').onSnapshot(s => { S.columns = s.exists ? s.data() : null; scheduleRender(); }, () => {});
   db.doc('settings/catalog').onSnapshot(s => { S.catalog = s.exists ? (s.data().items || []) : []; scheduleRender(); }, () => {});
+  db.doc('settings/refresh').onSnapshot(s => { S.refreshCfg = s.exists ? s.data() : null; }, () => {});
   db.doc('meta/refresh').onSnapshot(s => { S.meta = s.exists ? s.data() : null; S.dirty = true; scheduleRender(); }, () => {});
   db.collection('requests').onSnapshot(snap => { S.requests = snap.docs.map(d => Object.assign({ __id: d.id }, d.data())); scheduleRender(); }, () => {});
 }
@@ -2015,6 +2058,7 @@ readRoute(); render();
   if (!db) { S.loaded.nodb = true; render(); return; }
   S.db = db; subscribe();
   try { const u = window.claude && await window.claude.use('user'); if (u) { const can = await u.can('data.write'); if (can === false) { S.readOnly = true; scheduleRender(); } } } catch {}
+  try { const u = window.claude && await window.claude.use('user'); S.isOwner = !!(u && typeof u.isOwner === 'function' && await u.isOwner()); } catch {}
 })();
 })();
 </script>

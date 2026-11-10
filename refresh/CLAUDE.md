@@ -2,7 +2,8 @@
 
 This repository exists only to run the weekday price refresh for my Portfolio Ledger tracker
 (<YOUR-TRACKER-URL>). `.claude/settings.json` allows the ArtifactData tool and `python3 -I`
-without prompting, so the scheduled run needs no approval.
+without prompting, so the scheduled run needs no approval. The tracker page may also start a run
+right after an import; such a run does exactly the same steps.
 
 <!-- Before you use this file: replace <YOUR-TRACKER-URL> above with the link to YOUR copy of the
      tracker (it looks like https://claude.ai/artifact/...). Then delete this comment. -->

@@ -1,0 +1,7 @@
+﻿Transactiedatum;Valutadatum;Transactietype;Acties;Boekingsbedrag;Valuta;Omrekeningskoers;Conversion cost;Totale kosten;Gerealiseerde W/V;Opmerking;Correction reason;Instrument;Instrumentsymbool;Instrument ISIN;Instrumentvaluta;Type;Uitwisselingsbeschrijving;From Derivative;Underlying asset type;Gebruikersnaam
+15-06-2026;15-06-2026;Geldoverboeking;Opname;-500;EUR;1;0;0;;;-;;;;;;;No;;
+20-05-2026;22-05-2026;Transactie;Verkoop 10 @ 120,00 USD;1.100,90;EUR;0,92;-1,10;-2;178,75;;-;Example Robotics Inc.;EXRB:xnas;ZZ0000000017;USD;Stock;NASDAQ;No;;
+16-03-2026;16-03-2026;Corporate action;Contant dividend;10,95;EUR;0,92;0;0;;;-;Example Robotics Inc.;EXRB:xnas;ZZ0000000017;USD;Stock;NASDAQ;No;;
+03-02-2026;05-02-2026;Transactie;Koop 50 @ 40,00 EUR;-2.003,00;EUR;1;0;-3;0;;-;Sample Foods N.V.;SMPF:xams;ZZ0000000025;EUR;Stock;Euronext Amsterdam;No;;
+12-01-2026;14-01-2026;Transactie;Koop 20 @ 100,00 USD;-1.844,30;EUR;0,92;-1,80;-2,50;0;;-;Example Robotics Inc.;EXRB:xnas;ZZ0000000017;USD;Stock;NASDAQ;No;;
+05-01-2026;05-01-2026;Geldoverboeking;Storting;10.000,00;EUR;1;0;0;;;-;;;;;;;No;;
