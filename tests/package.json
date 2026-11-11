@@ -5,7 +5,8 @@
   "license": "MIT",
   "scripts": {
     "fixture": "node make-fake-export.js",
-    "test": "node check-page.js"
+    "test": "node check-page.js",
+    "test:app": "node check-app.js"
   },
   "devDependencies": {
     "d3": "7.9.0",

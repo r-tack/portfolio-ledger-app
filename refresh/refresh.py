@@ -258,10 +258,15 @@ def size_class(usd):
 inst_by_saxo = {v.get("saxo"): k for k, v in instruments.items() if v.get("saxo")}
 inst_out = {k: dict(v) for k, v in instruments.items()}
 for saxo, s in seen.items():
-    if saxo in inst_by_saxo:
+    hint = ((settings.get("hints") or {}).get("yahoo") or {}).get(saxo)  # a Yahoo symbol the user already confirmed
+    if saxo in inst_by_saxo and (instruments[inst_by_saxo[saxo]].get("yahoo") or not hint):
         continue
     try:
-        yahoo, extra, ok = pick(s)
+        if hint:
+            m_opt = re.match(r"^[A-Za-z.]+/\d{2}[FGHJKMNQUVXZ]\d{2}[CP][\d.]+", saxo)
+            yahoo, extra, ok = hint, (candidates(s)[1] if m_opt else {}), True
+        else:
+            yahoo, extra, ok = pick(s)
     except Exception as e:
         yahoo, extra, ok = None, {}, False
     doc = {"saxo": saxo, "yahoo": yahoo, "name": clean_name(s.get("name")) or saxo, "ticker": saxo.split(":")[0].split("/")[0],

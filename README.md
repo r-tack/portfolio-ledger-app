@@ -1,6 +1,8 @@
 # Portfolio Ledger
 
-A personal investment tracker that runs as a private page on claude.ai. You import the Excel or
+A personal investment tracker. It runs in two ways: as a private page on claude.ai, or as a
+[standalone web app](#standalone-app-for-mac-and-iphone-no-claudeai) that you install on your Mac
+and iPhone, with your data stored only on the device. You import the Excel or
 CSV export of your broker's transactions, and the page shows:
 
 - your positions and cash;
@@ -20,7 +22,9 @@ import stays in your copy only.
 | File | What it is |
 |---|---|
 | `portfolio-ledger.html` | The whole app: one page, published as a claude.ai artifact. |
-| `refresh/` | Optional. The daily price refresh: a script plus instructions for a Claude Code scheduled task. |
+| `app/` | The standalone web app: on-device storage, encrypted prices download, backup, install files. |
+| `.github/workflows/refresh.yml` | The standalone app's daily job: fetches prices at 6:53 and publishes the app. |
+| `refresh/` | The price refresh script. `standalone.py` is what the daily job runs. `CLAUDE.md` is for the claude.ai version (optional). |
 | `tests/` | A browser test, and a script that makes a small, made-up Saxo-style export (`.xlsx` and `.csv`) to test with. |
 | `LICENSE` | The MIT license: you may use, change and share this code. |
 
@@ -224,6 +228,84 @@ name always works.
   and has published security advisories, fixed in later versions that are only available from
   SheetJS's own site. Only import files you downloaded from your broker.
 
+## Standalone app for Mac and iPhone (no claude.ai)
+
+The same page also runs as an installable web app, hosted for free on GitHub Pages:
+
+- **Your data stays on each device**, in the browser's own storage. Nothing about your
+  portfolio is uploaded. Your Mac and iPhone don't sync: you copy your data from one to the
+  other with a backup file.
+- **Prices arrive every day at 6:53** (Belgian time). A GitHub Actions job in this repository
+  fetches them from Yahoo Finance and publishes them as an **encrypted** file next to the app.
+  Each device downloads the file and decrypts it with your passphrase.
+- **The repository can be public.** It contains no personal data. The list of instruments the
+  job fetches, and the passphrase, are GitHub *secrets*: encrypted, never shown again after you
+  save them, and not readable from forks.
+
+### Set it up
+
+1. Fork this repository (or use your own copy). On the free GitHub plan it must be **public**
+   for GitHub Pages to work.
+2. In the repository on GitHub: **Settings → Pages → Source: GitHub Actions**.
+3. **Settings → Secrets and variables → Actions → New repository secret**, twice:
+   - `LEDGER_PASSPHRASE`: a passphrase you make up. Use several random words; anyone can download
+     the encrypted file, so a short passphrase could be guessed.
+   - `LEDGER_REFRESH_LIST`: for now, the text `{"v":1,"imports":{}}`. You replace it in step 6.
+4. **Actions → Daily price refresh → Run workflow.** When it finishes, your app is at
+   `https://<your-github-name>.github.io/<repository-name>/`.
+5. Open that address in Safari.
+   - **iPhone:** Share → **Add to Home Screen**.
+   - **Mac:** File → **Add to Dock** (Safari 17 or newer). In Chrome: the install icon in the
+     address bar.
+
+   Open the app from its icon from then on. On iPhone this matters: Safari may delete the data
+   of a website you haven't visited for a week, but not the data of an app on the Home Screen.
+6. In the app, go to **Transactions** and import your broker's export. Then, in the **This
+   device** panel:
+   - type your passphrase and click **Save passphrase**;
+   - click **Copy refresh list**, and paste it as the new value of the `LEDGER_REFRESH_LIST`
+     secret on GitHub (Settings → Secrets and variables → Actions → the pencil next to it).
+7. Run the workflow once more (step 4). A minute later, click **Check now** in the app: the
+   header shows **Prices** with today's date.
+8. On your other device: install the app (step 5), save the same passphrase, and copy your data
+   across with **Download backup** on the first device and **Restore backup** on the second.
+
+### Day to day
+
+- **New export:** import it on each device, or import on one and move a backup to the other.
+- **You bought something new, or changed a benchmark:** the Refresh list shows *changed since
+  you last copied it*. Copy it into the `LEDGER_REFRESH_LIST` secret again. The new instrument
+  gets its price at the next 6:53 run, or right away if you run the workflow by hand.
+- **Backups:** your data exists only on your devices. Download a backup now and then, and keep
+  it somewhere private. It holds your whole portfolio.
+- **Notes from the refresh:** if the job can't find an instrument on Yahoo Finance, the Prices
+  box shows "The daily refresh has notes for you". To fix one by hand, add its Yahoo symbol to
+  the refresh list text before you paste it, in `"hints":{"yahoo":{"<broker symbol>":"<Yahoo symbol>"}}`.
+- **When the job fails**, GitHub emails you, and the app keeps the previous prices.
+
+### What is and isn't private
+
+- The refresh list holds, per instrument: symbol, name, ISIN, currency, type, exchange, and the
+  date and price of one trade (used to check that the right Yahoo symbol was found). It also
+  holds your benchmarks. It holds **no quantities, amounts or cash**.
+- The job's public log shows only counts ("35 price series, 0 failed"), never names. The full
+  report travels inside the encrypted file.
+- The prices file is encrypted with AES-256-GCM; the key comes from your passphrase
+  (PBKDF2-SHA256, 600,000 rounds). Its size still hints at how many price series it holds.
+- The passphrase is kept in the app's storage on each device, so anyone who can use your
+  unlocked device can open the app.
+
+### Good to know
+
+- GitHub can start a scheduled run a few minutes late, sometimes more at busy times.
+- GitHub pauses schedules in a repository with no activity for 60 days, and emails you first.
+  Running the workflow by hand, or any commit, resets that.
+- To change the time, edit `TIMEZONE`, `LOCAL_HOUR` and the two `cron` lines in
+  `.github/workflows/refresh.yml`.
+- You can host the app elsewhere: `python3 app/build.py out-folder` builds it, and any static
+  https host works. The prices file must sit next to `index.html` as `prices.json.enc`.
+- The app works offline once opened; it shows the last prices it downloaded.
+
 ## What's not included
 
 - **No data.** None of the original owner's transactions, positions, settings or prices are
@@ -233,9 +315,10 @@ name always works.
   you paid for them, and the benchmark lines on the Performance page stay empty. Logos, sectors
   and countries also come from the refresh.
 
-## Optional: a daily price refresh
+## Optional: a daily price refresh for the claude.ai version
 
-The `refresh/` folder sets up a Claude Code session in the cloud that runs every weekday. It
+This section is for the tracker published on claude.ai. The standalone app has its own daily job
+(see above). The `refresh/` folder sets up a Claude Code session in the cloud that runs every weekday. It
 reads your tracker's database, fetches closing prices from Yahoo Finance for your instruments,
 the benchmarks and the currencies you use, and writes them back. It never changes the page.
 
@@ -353,6 +436,11 @@ with a fake database standing in for claude.ai's, and checks that:
 - the refresh is not started, and the status line says why, when the connector is missing, not
   allowed or not connected, or when the person importing is not the owner;
 - no outside server is contacted. The two libraries are answered from `node_modules`.
+
+`npm run test:app` does the same for the standalone app. It needs Python 3 with the
+`cryptography` package. It checks on-device storage across a reload, the refresh list (no
+amounts in it), a wrong and a right passphrase, backup and restore on a second device, the
+install files and opening the app offline.
 
 Screenshots go to `tests/out/`. To test your own broker's layout, add made-up rows in that
 layout to `make-fake-export.js`. **Never commit your real export.**

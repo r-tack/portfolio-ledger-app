@@ -1,0 +1,98 @@
+# Builds the standalone web app, refreshes the prices, and publishes both to GitHub Pages.
+# Runs every day at 6:53 Belgian time, when you push to main, and when you press "Run workflow".
+#
+# Needs, in the repository settings:
+#   Pages > Source: GitHub Actions
+#   Secrets and variables > Actions > secrets LEDGER_PASSPHRASE and LEDGER_REFRESH_LIST
+# Without the two secrets the app is still published, without prices.
+name: Daily price refresh
+
+on:
+  schedule:
+    # GitHub schedules are in UTC. 6:53 in Belgium is 4:53 UTC in summer and 5:53 UTC in winter;
+    # the "when" job keeps only the one that matches today. Change TIMEZONE and both lines to move it.
+    - cron: '53 4 * * *'
+    - cron: '53 5 * * *'
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  TIMEZONE: Europe/Brussels
+  LOCAL_HOUR: '06'
+
+jobs:
+  when:
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.check.outputs.go }}
+    steps:
+      - id: check
+        env:
+          EVENT: ${{ github.event_name }}
+          CRON: ${{ github.event.schedule }}
+        run: |
+          go=true
+          if [ "$EVENT" = "schedule" ]; then
+            offset=$(TZ="$TIMEZONE" date +%z)            # +0100 or +0200
+            utc_hour=$(( (10#$LOCAL_HOUR - 10#${offset:1:2} + 24) % 24 ))
+            [ "$CRON" = "53 $utc_hour * * *" ] || go=false
+          fi
+          echo "go=$go" >> "$GITHUB_OUTPUT"
+
+  publish:
+    needs: when
+    if: needs.when.outputs.go == 'true'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - id: pages
+        uses: actions/configure-pages@v5
+      - name: Build the app
+        run: python3 app/build.py _site
+      - name: Fetch the previous prices file
+        env:
+          BASE: ${{ steps.pages.outputs.base_url }}
+        run: curl -fsSL --retry 2 "$BASE/prices.json.enc" -o _site/prices.json.enc || rm -f _site/prices.json.enc
+      - name: Refresh prices
+        id: refresh
+        continue-on-error: true
+        env:
+          LEDGER_PASSPHRASE: ${{ secrets.LEDGER_PASSPHRASE }}
+          LEDGER_REFRESH_LIST: ${{ secrets.LEDGER_REFRESH_LIST }}
+        run: |
+          if [ -z "$LEDGER_PASSPHRASE" ] || [ -z "$LEDGER_REFRESH_LIST" ]; then
+            echo "The secrets LEDGER_PASSPHRASE and LEDGER_REFRESH_LIST are not both set: publishing the app without new prices."
+            exit 0
+          fi
+          pip install --quiet cryptography pillow
+          python3 refresh/standalone.py _site/prices.json.enc prices.new
+          mv prices.new _site/prices.json.enc
+      - name: Keep a failed run's file (previous prices plus the error)
+        if: steps.refresh.outcome == 'failure'
+        run: if [ -s prices.new ]; then mv prices.new _site/prices.json.enc; fi
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+      - id: deploy
+        uses: actions/deploy-pages@v4
+      - name: Report a failed refresh
+        if: steps.refresh.outcome == 'failure'
+        run: |
+          echo "The price refresh failed; the app was published with the previous prices."
+          exit 1

@@ -1,4 +1,4 @@
-<!-- Portfolio Ledger: a personal investment tracker that runs as a claude.ai artifact.
+<!-- Portfolio Ledger: a personal investment tracker. Runs as a claude.ai artifact, or standalone (app/).
      See README.md for how to publish your own copy and how to adapt the Excel import. -->
 <title>Portfolio Ledger</title>
 <meta name="claude:viewport-fit-sides" content="cover">
@@ -1865,7 +1865,7 @@ function importPanelHTML(m) {
       <div class="colchips never">${list.length ? list.map(c => `<span class="pill">${esc(c)}${S.readOnly ? '' : `<button class="chipx" data-unexcl="${esc(role)}" data-col="${esc(c)}" aria-label="Import ${esc(c)} again from future files">×</button>`}</span>`).join('') : '<span class="small muted">None</span>'}</div>
       ${S.readOnly || !avail.length ? '' : `<div class="manage-add" style="margin-top:8px"><select data-exsel="${esc(role)}" aria-label="Column to stop importing"><option value="">Never import another column…</option>${avail.map(c => `<option value="${esc(c)}">${esc(COL_EN[c] && COL_EN[c] !== c ? `${c} (${COL_EN[c]})` : c)}</option>`).join('')}</select><button class="btn" data-exadd="${esc(role)}">Never import</button></div>`}</div>`;
   }).join('');
-  return `<section class="panel"><details class="imports" ${store.get('impOpen', false) ? 'open' : ''} id="imp-details"><summary><span>Imports & columns</span><span class="small muted" style="font-weight:400">${imps.length} file${imps.length === 1 ? '' : 's'} · ${total} column${total === 1 ? '' : 's'} never imported ${IC.chev}</span></summary>
+  return `${window.Standalone ? window.Standalone.panelHTML() : ''}<section class="panel"><details class="imports" ${store.get('impOpen', false) ? 'open' : ''} id="imp-details"><summary><span>Imports & columns</span><span class="small muted" style="font-weight:400">${imps.length} file${imps.length === 1 ? '' : 's'} · ${total} column${total === 1 ? '' : 's'} never imported ${IC.chev}</span></summary>
     <div style="display:grid;gap:16px;margin-top:14px">
     <div class="drop" id="drop"><p><b>Drop a newer .xlsx or .csv export here.</b> The file is only opened in your browser. Columns you blanked out, and every column on the never-import list, are cut before anything is saved, even when a file has data in them. Overlapping dates replace the older import.</p></div>
     <div id="imp-status" class="small ink2" role="status">${esc(S.ui.impStatus || '')}</div>
@@ -1910,6 +1910,7 @@ function stripColumn(role, col) {
   return writeChain.then(() => toast(`“${col}” was also removed from your saved imports.`));
 }
 function bindImport(v) {
+  if (window.Standalone) window.Standalone.bind(v);
   const det = $('#imp-details', v); if (det) det.ontoggle = () => store.set('impOpen', det.open);
   const drop = $('#drop', v);
   if (drop) { drop.ondragover = e => { e.preventDefault(); drop.classList.add('over'); }; drop.ondragleave = () => drop.classList.remove('over'); drop.ondrop = e => { e.preventDefault(); drop.classList.remove('over'); const f = e.dataTransfer.files[0]; if (f) importFile(f); }; }
@@ -2008,7 +2009,8 @@ async function importFile(file) {
    Without that document, or for anyone but the owner, prices follow at the next price refresh. */
 const REFRESH_SERVER = 'Claude Code Remote';
 const REFRESH_WAIT = 30 * 60e3;
-const REFRESH_LATER = 'New instruments get prices and logos at the next price refresh.';
+/* window.Standalone exists only in the standalone web app (app/local.js), where a GitHub Actions job fetches the prices. */
+const REFRESH_LATER = window.Standalone ? window.Standalone.afterImport : 'New instruments get prices and logos at the next price refresh.';
 async function startRefresh() {
   const trig = String((S.refreshCfg && S.refreshCfg.trigger) || '');
   if (!/^trig_[A-Za-z0-9]+$/.test(trig) || !S.isOwner) return { toast: 'Import saved.', status: REFRESH_LATER };
@@ -2057,6 +2059,7 @@ readRoute(); render();
   let db = null; try { db = window.claude && window.claude.use ? await window.claude.use('db') : null; } catch {}
   if (!db) { S.loaded.nodb = true; render(); return; }
   S.db = db; subscribe();
+  if (window.Standalone) window.Standalone.init({ S, C, getModel, toast, scheduleRender, esc });
   try { const u = window.claude && await window.claude.use('user'); if (u) { const can = await u.can('data.write'); if (can === false) { S.readOnly = true; scheduleRender(); } } } catch {}
   try { const u = window.claude && await window.claude.use('user'); S.isOwner = !!(u && typeof u.isOwner === 'function' && await u.isOwner()); } catch {}
 })();
