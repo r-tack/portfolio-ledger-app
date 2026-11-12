@@ -1,5 +1,5 @@
 # Builds the standalone web app, refreshes the prices, and publishes both to GitHub Pages.
-# Runs every day at 6:53 Belgian time, when you push to main, and when you press "Run workflow".
+# Runs every day around 6:53 Belgian time, when you push to main, and when you press "Run workflow".
 #
 # Needs, in the repository settings:
 #   Pages > Source: GitHub Actions
@@ -9,8 +9,10 @@ name: Daily price refresh
 
 on:
   schedule:
-    # GitHub schedules are in UTC. 6:53 in Belgium is 4:53 UTC in summer and 5:53 UTC in winter;
-    # the "when" job keeps only the one that matches today. Change TIMEZONE and both lines to move it.
+    # GitHub schedules are in UTC, and GitHub starts them late when it is busy (sometimes hours),
+    # or skips one now and then. So there are two lines: 4:53 and 5:53 UTC. One of them is 6:53
+    # in Belgium whatever the season (5:53 UTC in winter, 4:53 UTC in summer); the other runs
+    # an hour earlier or later. Running twice is harmless: each run replaces the prices file.
     - cron: '53 4 * * *'
     - cron: '53 5 * * *'
   workflow_dispatch:
@@ -26,32 +28,8 @@ concurrency:
   group: pages
   cancel-in-progress: false
 
-env:
-  TIMEZONE: Europe/Brussels
-  LOCAL_HOUR: '06'
-
 jobs:
-  when:
-    runs-on: ubuntu-latest
-    outputs:
-      go: ${{ steps.check.outputs.go }}
-    steps:
-      - id: check
-        env:
-          EVENT: ${{ github.event_name }}
-          CRON: ${{ github.event.schedule }}
-        run: |
-          go=true
-          if [ "$EVENT" = "schedule" ]; then
-            offset=$(TZ="$TIMEZONE" date +%z)            # +0100 or +0200
-            utc_hour=$(( (10#$LOCAL_HOUR - 10#${offset:1:2} + 24) % 24 ))
-            [ "$CRON" = "53 $utc_hour * * *" ] || go=false
-          fi
-          echo "go=$go" >> "$GITHUB_OUTPUT"
-
   publish:
-    needs: when
-    if: needs.when.outputs.go == 'true'
     runs-on: ubuntu-latest
     environment:
       name: github-pages

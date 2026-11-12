@@ -300,8 +300,11 @@ The same page also runs as an installable web app, hosted for free on GitHub Pag
 - GitHub can start a scheduled run a few minutes late, sometimes more at busy times.
 - GitHub pauses schedules in a repository with no activity for 60 days, and emails you first.
   Running the workflow by hand, or any commit, resets that.
-- To change the time, edit `TIMEZONE`, `LOCAL_HOUR` and the two `cron` lines in
-  `.github/workflows/refresh.yml`.
+- The job runs twice a day, at 4:53 and 5:53 UTC, so that one of the two is 6:53 in Belgium in
+  both summer and winter. The other run is an hour earlier or later and does no harm. To change
+  the time, edit the two `cron` lines in `.github/workflows/refresh.yml` (they are in UTC).
+- GitHub's schedule is best effort: a run can start hours late or, rarely, be skipped. The
+  next day's run catches up. To refresh right now, run the workflow by hand.
 - You can host the app elsewhere: `python3 app/build.py out-folder` builds it, and any static
   https host works. The prices file must sit next to `index.html` as `prices.json.enc`.
 - The app works offline once opened; it shows the last prices it downloaded.
