@@ -265,8 +265,8 @@ The same page also runs as an installable web app, hosted for free on GitHub Pag
    - type your passphrase and click **Save passphrase**;
    - click **Copy refresh list**, and paste it as the new value of the `LEDGER_REFRESH_LIST`
      secret on GitHub (Settings → Secrets and variables → Actions → the pencil next to it).
-7. Run the workflow once more (step 4). A minute later, click **Check now** in the app: the
-   header shows **Prices** with today's date.
+7. Run the workflow once more (step 4). The app looks for new prices by itself, so a minute
+   later the header shows **Prices** with today's date. You don't need to press anything.
 8. On your other device: install the app (step 5), save the same passphrase, and copy your data
    across with **Download backup** on the first device and **Restore backup** on the second.
 
@@ -278,6 +278,9 @@ The same page also runs as an installable web app, hosted for free on GitHub Pag
   gets its price at the next 6:53 run, or right away if you run the workflow by hand.
 - **Backups:** your data exists only on your devices. Download a backup now and then, and keep
   it somewhere private. It holds your whole portfolio.
+- **Prices arrive by themselves.** The app looks for a new prices file when it opens, when you
+  come back to it (at most every 5 minutes), when the connection returns, and every 15 minutes
+  while it is open. After the 6:53 run, open the app and the new prices are there.
 - **Notes from the refresh:** if the job can't find an instrument on Yahoo Finance, the Prices
   box shows "The daily refresh has notes for you". To fix one by hand, add its Yahoo symbol to
   the refresh list text before you paste it, in `"hints":{"yahoo":{"<broker symbol>":"<Yahoo symbol>"}}`.

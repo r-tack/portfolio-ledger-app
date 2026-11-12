@@ -89,7 +89,8 @@
   }
   let ctx = null, checking = null;
   const state = () => ls.get('prices', {});
-  const setState = s => { ls.set('prices', s); if (ctx) ctx.scheduleRender(); };
+  /* Only a real change redraws the page; a check that finds nothing new just notes the time. */
+  const setState = s => { const old = state(), strip = x => JSON.stringify(Object.assign({}, x, { checkedAt: 0 })); ls.set('prices', s); if (ctx && strip(old) !== strip(s)) ctx.scheduleRender(); };
   function checkPrices() {
     return checking = checking || (async () => {
       const pass = ls.get('pass', '');
@@ -100,14 +101,16 @@
         let r; try { r = await fetch(PRICES_URL, { cache: 'no-store' }); } catch { setState(Object.assign({}, keep, { status: 'offline', checkedAt: at })); return; }
         if (r.status === 404) { setState(Object.assign({}, keep, { status: 'nofile', checkedAt: at })); return; }
         if (!r.ok) { setState(Object.assign({}, keep, { status: 'offline', checkedAt: at })); return; }
-        const file = await decrypt(await r.arrayBuffer(), pass);
+        const buf = await r.arrayBuffer(), fileId = btoa(String.fromCharCode(...new Uint8Array(buf).slice(4, 32)));
+        if (keep.status === 'ok' && keep.fileId === fileId) { setState(Object.assign({}, keep, { checkedAt: at })); return; }  // same file as last time: nothing to do
+        const file = await decrypt(buf, pass);
         const docs = file.docs || {}, sets = {};
         for (const [p, d] of Object.entries(docs)) {
           if (/^(market|instruments|meta)\/[^/]+$/.test(p) || p === 'settings/catalog') sets[p] = d;
           else if (/^requests\/[^/]+$/.test(p) && DOCS.has(p)) sets[p] = Object.assign({}, DOCS.get(p), d);
         }
         if (file.generatedAt !== keep.applied) await commit(sets);
-        setState({ status: 'ok', checkedAt: at, applied: file.generatedAt, report: file.report || '', error: file.error || '' });
+        setState({ status: 'ok', checkedAt: at, fileId, applied: file.generatedAt, report: file.report || '', error: file.error || '' });
       } catch (e) {
         setState(Object.assign({}, keep, { status: e && e.code === 'passphrase' ? 'badpass' : e && e.code === 'format' ? 'format' : 'error', checkedAt: at }));
       }
@@ -155,7 +158,7 @@
     if (!b || b.format !== BACKUP_FORMAT || !b.docs || typeof b.docs !== 'object') throw new Error("That file isn't a Portfolio Ledger backup.");
     const sets = {}; for (const [p, d] of Object.entries(b.docs)) if (/^[^/]+\/[^/]+$/.test(p) && d && typeof d === 'object') sets[p] = d;
     await commit(sets, [...DOCS.keys()].filter(p => !(p in sets)));
-    ls.set('prices', Object.assign({}, state(), { applied: null }));
+    ls.set('prices', Object.assign({}, state(), { applied: null, fileId: null }));
     return Object.keys(sets).length;
   }
 
@@ -165,7 +168,7 @@
     const s = state(), meta = ctx.S.meta;
     const asOf = meta && meta.pricesAsOf ? ` Prices as of ${meta.pricesAsOf}.` : '';
     switch (s.status) {
-      case 'ok': return `Last checked ${when(s.checkedAt)}.${asOf}${s.error ? ' The last daily refresh failed, so these are the prices from the run before it.' : ''}`;
+      case 'ok': return `Updated automatically. Last daily refresh: ${when(s.applied)}.${asOf}${s.error ? ' The last daily refresh failed, so these are the prices from the run before it.' : ''}`;
       case 'nopass': return 'Enter the prices passphrase to download prices on this device.';
       case 'badpass': return "The passphrase doesn't match the prices file. Check it and save it again.";
       case 'nofile': return 'No prices file has been published yet. It appears after the first daily refresh.';
@@ -185,7 +188,7 @@
       <div style="display:grid;gap:16px">
         <div style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;gap:10px">
           <div><h3 class="sub-h" style="margin:0">Prices</h3><p class="small ink2" id="sa-prices" role="status" style="margin:2px 0 0">${esc(pricesLine())}</p></div>
-          <div class="manage-add"><input type="password" id="sa-pass" autocomplete="off" style="border:1px solid var(--line-2);background:var(--surface);border-radius:9px;padding:7px 11px;font-size:13.5px" placeholder="${has ? 'Passphrase saved. Type a new one to change it' : 'Prices passphrase'}" aria-label="Prices passphrase"><button class="btn" id="sa-pass-save">Save passphrase</button><button class="btn" id="sa-check">Check now</button></div>
+          <div class="manage-add"><input type="password" id="sa-pass" autocomplete="off" style="border:1px solid var(--line-2);background:var(--surface);border-radius:9px;padding:7px 11px;font-size:13.5px" placeholder="${has ? 'Passphrase saved. Type a new one to change it' : 'Prices passphrase'}" aria-label="Prices passphrase"><button class="btn" id="sa-pass-save">Save passphrase</button></div>
           ${review ? `<details class="small"><summary>The daily refresh has notes for you</summary><pre style="white-space:pre-wrap;font:inherit;margin:8px 0 0">${esc(review.trim())}</pre></details>` : ''}
         </div>
         <div style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;gap:10px">
@@ -205,10 +208,9 @@
     if (!$('#sa-panel')) return;
     $('#sa-pass-save').onclick = async () => {
       const p = $('#sa-pass').value; if (!p) { toast('Type the passphrase first.'); return; }
-      ls.set('pass', p); ls.set('prices', Object.assign({}, state(), { applied: null })); toast('Passphrase saved on this device. Checking prices…');
+      ls.set('pass', p); ls.set('prices', Object.assign({}, state(), { applied: null, fileId: null })); toast('Passphrase saved on this device. Checking prices…');
       await checkPrices(); toast(state().status === 'ok' ? 'Prices downloaded.' : pricesLine());
     };
-    $('#sa-check').onclick = async () => { toast('Checking prices…'); await checkPrices(); toast(state().status === 'ok' ? 'Prices are up to date.' : pricesLine()); };
     $('#sa-copy').onclick = async () => {
       const l = refreshList(), text = JSON.stringify(l);
       try { await navigator.clipboard.writeText(text); } catch { window.prompt('Copy this text:', text); }
@@ -228,7 +230,13 @@
       ctx = c;
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
       checkPrices();
-      document.addEventListener('visibilitychange', () => { if (!document.hidden && Date.now() - Date.parse(state().checkedAt || 0) > 30 * 60e3) checkPrices(); });
+      /* Prices are looked for without any button: at start, whenever the app comes back to the
+         front (at most every 5 minutes), when the connection returns, and every 15 minutes while
+         it is open. A check downloads a small file and only decrypts it when it is new. */
+      const stale = () => !state().checkedAt || Date.now() - Date.parse(state().checkedAt) > 5 * 60e3;
+      document.addEventListener('visibilitychange', () => { if (!document.hidden && stale()) checkPrices(); });
+      window.addEventListener('online', () => { if (stale()) checkPrices(); });
+      setInterval(() => { if (!document.hidden) checkPrices(); }, 15 * 60e3);
     },
     panelHTML, bind, refreshList, checkPrices,
     afterImport: 'If this import has a new instrument, copy the refresh list to GitHub again (This device, below) to get its price.',

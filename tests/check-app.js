@@ -67,6 +67,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok }); console.
 
   // 1. First start: empty, stored on this device, no sign-in.
   const { ctx, page, errors } = await open();
+  await page.clock.install();
   await page.goto(BASE);
   const empty = await page.waitForSelector('text=No transactions yet', { timeout: 8000 }).then(() => true, () => false);
   check('First start: "No transactions yet", not "Sign in"', empty && !(await body(page)).includes('Sign in to see your portfolio'));
@@ -123,6 +124,18 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok }); console.
   check('Overview values the priced position with the downloaded price (10 × $150 at 1,10 = € 1.363,64)', /1\.363,64/.test(ov) && ov.includes('1 position has no price data yet'));
   await page.click('#tab-transactions'); await settle(page);
   await page.screenshot({ path: path.join(OUT, 'app-2-this-device.png'), fullPage: true });
+
+  // 5b. Prices arrive without any button: a new file is published while the app is open.
+  check('There is no "Check now" button', !(await page.$('#sa-check')) && !(await body(page)).includes('Check now'));
+  const later = new Date(Date.now() + 864e5).toISOString().slice(0, 10);
+  writePrices({ 'meta/refresh': { pricesAsOf: later, fetchedAt: new Date().toISOString(), source: 'Yahoo Finance (daily closes)' },
+    'market/EXRB': { symbol: 'EXRB', name: 'Example Robotics', currency: 'USD', price: 160, closes: closes.concat([[later, 160]]) } });
+  await page.clock.fastForward(16 * 60e3); await page.waitForFunction(d => document.querySelector('#asof').textContent.includes(d), new Date(later + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }), { timeout: 8000 }).catch(() => {});
+  const asofLater = await page.$eval('#asof', e => e.textContent);
+  check('A new prices file is picked up by itself while the app is open (no click)', asofLater.includes(new Date(later + 'T12:00:00').toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })), asofLater);
+  const checks1 = await page.evaluate(() => JSON.parse(localStorage.getItem('pl:prices')).checkedAt);
+  await page.clock.fastForward(16 * 60e3); await settle(page);
+  check('A check that finds the same file changes nothing on screen', (await page.evaluate(() => JSON.parse(localStorage.getItem('pl:prices')).status)) === 'ok' && (await page.evaluate(() => JSON.parse(localStorage.getItem('pl:prices')).checkedAt)) !== checks1);
 
   // 6. Backup on this device, restore on a "second device" (a fresh browser profile).
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#sa-backup')]);
