@@ -297,7 +297,6 @@ The same page also runs as an installable web app, hosted for free on GitHub Pag
 
 ### Good to know
 
-- GitHub can start a scheduled run a few minutes late, sometimes more at busy times.
 - GitHub pauses schedules in a repository with no activity for 60 days, and emails you first.
   Running the workflow by hand, or any commit, resets that.
 - The job runs twice a day, at 4:53 and 5:53 UTC, so that one of the two is 6:53 in Belgium in
