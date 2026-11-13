@@ -278,6 +278,17 @@ The same page also runs as an installable web app, hosted for free on GitHub Pag
   gets its price at the next 6:53 run, or right away if you run the workflow by hand.
 - **Backups:** your data exists only on your devices. Download a backup now and then, and keep
   it somewhere private. It holds your whole portfolio.
+- **When GitHub starts the job late.** GitHub's own timer is best effort: in a new repository a
+  scheduled run can start many hours late, or not at all. Give the app a GitHub token and it
+  starts the job itself when it opens and finds no prices from the latest 6:53 run; the new
+  prices arrive about two minutes later, and the header says **Refreshing prices…** meanwhile.
+  To create the token: GitHub → your picture → **Settings → Developer settings → Personal access
+  tokens → Fine-grained tokens → Generate new token**. Choose an expiry date, **Only select
+  repositories** with this repository, and under **Repository permissions** set **Actions** to
+  **Read and write**. Nothing else. Copy the token (it starts with `github_pat_`) and paste it in
+  the app under **This device → Prices → Save token**, on each device. The token can only run,
+  view or cancel this repository's Actions; it can't read or change your code or secrets. It is
+  kept in the app's storage on the device. Renew it when it expires; the app tells you.
 - **Prices arrive by themselves.** The app looks for a new prices file when it opens, when you
   come back to it (at most every 5 minutes), when the connection returns, and every 15 minutes
   while it is open. After the 6:53 run, open the app and the new prices are there.

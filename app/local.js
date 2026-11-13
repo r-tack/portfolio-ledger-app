@@ -114,7 +114,62 @@
       } catch (e) {
         setState(Object.assign({}, keep, { status: e && e.code === 'passphrase' ? 'badpass' : e && e.code === 'format' ? 'format' : 'error', checkedAt: at }));
       }
-    })().finally(() => { checking = null; });
+    })().then(maybeStartJob).finally(() => { checking = null; });
+  }
+
+  /* ---------- starting the daily job from the app ----------
+     GitHub's own timer can start the job hours late, or not at all. So when the app finds no
+     prices from the latest 6:53 run, it asks GitHub to run the job now (the workflow's "Run
+     workflow" button, through the API). That needs a fine-grained GitHub token that may only run
+     Actions on this one repository, saved on this device. At most one start per 20 minutes. */
+  const JOB = 'refresh.yml', DUE = { tz: 'Europe/Brussels', h: 6, m: 53 }, JOB_WAIT = 20 * 60e3;
+  // The app's repository, from its GitHub Pages address: https://<owner>.github.io/<repository>/
+  const repo = () => { const m = location.hostname.match(/^([A-Za-z0-9-]+)\.github\.io$/), seg = location.pathname.split('/')[1]; return m && seg ? `${m[1]}/${seg}` : ls.get('repo', ''); };
+  // The latest 6:53 in Belgium that has already passed, as a UTC time in ms.
+  function lastDue(now = Date.now()) {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat('en-GB', { timeZone: DUE.tz, hourCycle: 'h23', year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      .formatToParts(new Date(now)).map(x => [x.type, +x.value]));
+    const local = Date.UTC(parts.year, parts.month - 1, parts.day, parts.hour, parts.minute, parts.second), offset = local - Math.floor(now / 1000) * 1000;
+    let due = Date.UTC(parts.year, parts.month - 1, parts.day, DUE.h, DUE.m) - offset;
+    if (due > now) due -= 864e5;
+    return due;
+  }
+  const job = () => ls.get('job', {});
+  async function maybeStartJob() {
+    const s = state(), token = ls.get('ghtoken', ''), r = repo();
+    if (!token || !r || !['ok', 'nofile'].includes(s.status)) return;
+    if (s.status === 'ok' && Date.parse(s.applied) >= lastDue()) return;  // today's prices are here
+    if (Date.now() - (job().at || 0) < JOB_WAIT) return;                  // started a moment ago
+    const j = { at: Date.now() };
+    ls.set('job', j);
+    try {
+      const res = await fetch(`https://api.github.com/repos/${r}/actions/workflows/${JOB}/dispatches`, {
+        method: 'POST', headers: { Accept: 'application/vnd.github+json', Authorization: `Bearer ${token}`, 'X-GitHub-Api-Version': '2022-11-28' },
+        body: JSON.stringify({ ref: 'main' }) });
+      j.result = res.status === 204 ? 'started' : res.status === 401 ? 'badtoken' : res.status === 403 || res.status === 404 ? 'noaccess' : 'error';
+    } catch { j.result = 'error'; }
+    ls.set('job', j);
+    if (j.result === 'started') { ctx.S.refreshStarted = j.at; follow(); }
+    ctx.scheduleRender();
+  }
+  // After a start: look for the new file every 30 seconds for 15 minutes.
+  let following = null;
+  function follow() {
+    clearInterval(following);
+    const until = job().at + 15 * 60e3;
+    following = setInterval(() => { if (Date.now() > until || (state().status === 'ok' && Date.parse(state().applied) >= job().at - 60e3)) { clearInterval(following); ctx.scheduleRender(); return; } checkPrices(); }, 30e3);
+  }
+  function jobLine() {
+    const j = job(), r = repo();
+    if (!ls.get('ghtoken', '')) return 'To get prices even when GitHub starts the 6:53 job late, save a GitHub token here: the app then starts the job itself when it opens.';
+    if (!r) return "The app couldn't tell its GitHub repository from its address.";
+    switch (j.result) {
+      case 'started': return `Token saved. The app started the job ${when(new Date(j.at).toISOString())}${Date.now() - j.at < 15 * 60e3 ? ': new prices in a couple of minutes.' : '.'}`;
+      case 'badtoken': return 'GitHub refused the token (expired or mistyped). Create a new one and save it.';
+      case 'noaccess': return `The token may not run Actions on ${r}. It needs access to this repository with "Actions: Read and write".`;
+      case 'error': return "The job couldn't be started (offline?). The app tries again later.";
+      default: return 'Token saved. The app starts the job itself when the prices from 6:53 are missing.';
+    }
   }
 
   /* ---------- the refresh list: what the daily job needs to know, and nothing more ----------
@@ -189,6 +244,8 @@
         <div style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;gap:10px">
           <div><h3 class="sub-h" style="margin:0">Prices</h3><p class="small ink2" id="sa-prices" role="status" style="margin:2px 0 0">${esc(pricesLine())}</p></div>
           <div class="manage-add"><input type="password" id="sa-pass" autocomplete="off" style="border:1px solid var(--line-2);background:var(--surface);border-radius:9px;padding:7px 11px;font-size:13.5px" placeholder="${has ? 'Passphrase saved. Type a new one to change it' : 'Prices passphrase'}" aria-label="Prices passphrase"><button class="btn" id="sa-pass-save">Save passphrase</button></div>
+          <p class="small muted" id="sa-job" style="margin:0">${esc(jobLine())}</p>
+          <div class="manage-add"><input type="password" id="sa-token" autocomplete="off" style="border:1px solid var(--line-2);background:var(--surface);border-radius:9px;padding:7px 11px;font-size:13.5px" placeholder="${ls.get('ghtoken', '') ? 'GitHub token saved. Paste a new one to change it' : 'GitHub token (github_pat_…)'}" aria-label="GitHub token"><button class="btn" id="sa-token-save">Save token</button></div>
           ${review ? `<details class="small"><summary>The daily refresh has notes for you</summary><pre style="white-space:pre-wrap;font:inherit;margin:8px 0 0">${esc(review.trim())}</pre></details>` : ''}
         </div>
         <div style="border:1px solid var(--line);border-radius:10px;padding:12px 14px;display:grid;gap:10px">
@@ -211,6 +268,11 @@
       ls.set('pass', p); ls.set('prices', Object.assign({}, state(), { applied: null, fileId: null })); toast('Passphrase saved on this device. Checking prices…');
       await checkPrices(); toast(state().status === 'ok' ? 'Prices downloaded.' : pricesLine());
     };
+    $('#sa-token-save').onclick = async () => {
+      const t = $('#sa-token').value.trim(); if (!t) { toast('Paste the token first.'); return; }
+      ls.set('ghtoken', t); ls.set('job', {}); toast('Token saved on this device.'); ctx.scheduleRender();
+      await checkPrices(); if (job().result) toast(jobLine());
+    };
     $('#sa-copy').onclick = async () => {
       const l = refreshList(), text = JSON.stringify(l);
       try { await navigator.clipboard.writeText(text); } catch { window.prompt('Copy this text:', text); }
@@ -229,6 +291,7 @@
     init(c) {
       ctx = c;
       if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+      if (job().result === 'started' && Date.now() - job().at < 15 * 60e3) { c.S.refreshStarted = job().at; follow(); }
       checkPrices();
       /* Prices are looked for without any button: at start, whenever the app comes back to the
          front (at most every 5 minutes), when the connection returns, and every 15 minutes while
@@ -238,7 +301,7 @@
       window.addEventListener('online', () => { if (stale()) checkPrices(); });
       setInterval(() => { if (!document.hidden) checkPrices(); }, 15 * 60e3);
     },
-    panelHTML, bind, refreshList, checkPrices,
+    panelHTML, bind, refreshList, checkPrices, lastDue,
     afterImport: 'If this import has a new instrument, copy the refresh list to GitHub again (This device, below) to get its price.',
   };
 })();

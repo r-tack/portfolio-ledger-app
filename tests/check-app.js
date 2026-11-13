@@ -44,15 +44,16 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok }); console.
   const BASE = `http://localhost:${server.address().port}/`;
   const browser = await chromium.launch();
   const outside = new Set();
-  async function open(opts = {}) {
+  async function open(opts = {}, github) {
     const ctx = await browser.newContext(Object.assign({ viewport: { width: 1280, height: 900 }, acceptDownloads: true, serviceWorkers: 'block' }, opts));
     await ctx.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: BASE.slice(0, -1) }).catch(() => {});
     const page = await ctx.newPage(), errors = [];
     page.on('pageerror', e => errors.push('pageerror: ' + e.message));
-    page.on('console', m => { if (m.type() === 'error' && !/fonts\.(googleapis|gstatic)|prices\.json\.enc/.test(m.text() + ((m.location() || {}).url || ''))) errors.push('console: ' + m.text()); });
+    page.on('console', m => { if (m.type() === 'error' && !/fonts\.(googleapis|gstatic)|prices\.json\.enc|api\.github\.com/.test(m.text() + ((m.location() || {}).url || ''))) errors.push('console: ' + m.text()); });
     await ctx.route('**/*', r => {
       const u = r.request().url();
       if (u.startsWith(BASE)) return r.continue();
+      if (github && u.startsWith('https://api.github.com/')) return github(r);
       outside.add(new URL(u).host);
       if (u.startsWith('https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/')) return r.fulfill({ path: D3, contentType: 'application/javascript' });
       if (u.startsWith('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/')) return r.fulfill({ path: XL, contentType: 'application/javascript' });
@@ -158,6 +159,51 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok }); console.
   check('Phone width (390 px): no sideways scrolling', !(await two.page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)));
   check('Second device: no errors', !two.errors.length, two.errors.length ? two.errors : 'none');
   await two.ctx.close();
+
+  // 6b. The app starts the daily job itself when today's 6:53 prices are missing (GitHub API mocked).
+  {
+    const calls = []; let reply = 204;
+    const github = r => { calls.push({ url: r.request().url(), method: r.request().method(), auth: r.request().headers()['authorization'], body: r.request().postData() }); return r.fulfill({ status: reply, body: '' }); };
+    const old = new Date(Date.now() - 2 * 864e5).toISOString();
+    writePrices({ 'meta/refresh': { pricesAsOf: old.slice(0, 10), fetchedAt: old, source: 'Yahoo Finance (daily closes)' } }, { generatedAt: old });
+    const seed = (token) => `localStorage.setItem('pl:pass', ${JSON.stringify(JSON.stringify(PASS))}); localStorage.setItem('pl:repo', '"test-owner/test-repo"');` + (token ? `localStorage.setItem('pl:ghtoken', '"github_pat_TEST"');` : '');
+    // Without a token: nothing is sent to GitHub, and the panel explains the token.
+    let t = await open({}, github); await t.page.addInitScript(seed(false));
+    await t.page.goto(BASE + '#transactions'); await t.page.waitForSelector('#sa-job', { timeout: 8000 }).catch(() => {}); await t.page.waitForTimeout(1500);
+    check('Without a GitHub token: the job is not started, the panel says why a token helps', !calls.length && /save a GitHub token here/.test(await t.page.$eval('#sa-job', e => e.textContent)));
+    await t.ctx.close();
+    // With a token and yesterday's prices: one start, with the token, on the main branch.
+    t = await open({}, github); await t.page.clock.install(); await t.page.addInitScript(seed(true));
+    await t.page.goto(BASE + '#transactions'); await t.page.waitForFunction(() => document.querySelector('#asof') && document.querySelector('#asof').textContent === 'Refreshing prices…', null, { timeout: 8000 }).catch(() => {});
+    check('Prices older than the last 6:53: the app starts the job once (POST, token, main branch)',
+      calls.length === 1 && calls[0].method === 'POST' && calls[0].url === 'https://api.github.com/repos/test-owner/test-repo/actions/workflows/refresh.yml/dispatches' && calls[0].auth === 'Bearer github_pat_TEST' && JSON.parse(calls[0].body).ref === 'main', calls);
+    check('Header says "Refreshing prices…" after the start', (await t.page.$eval('#asof', e => e.textContent)) === 'Refreshing prices…');
+    await t.page.reload(); await t.page.waitForTimeout(1500);
+    check('Reopening right after: no second start', calls.length === 1, calls.length);
+    // The job finishes: a new file appears and is picked up within 30 seconds, without a click.
+    writePrices({ 'meta/refresh': { pricesAsOf: new Date().toISOString().slice(0, 10), fetchedAt: new Date(Date.now() + 60e3).toISOString(), source: 'Yahoo Finance (daily closes)' } });
+    await t.page.clock.fastForward(31e3); await t.page.waitForFunction(() => /^Prices /.test(document.querySelector('#asof').textContent), null, { timeout: 8000 }).catch(() => {});
+    check('The new prices arrive by themselves after the start', /^Prices /.test(await t.page.$eval('#asof', e => e.textContent)), await t.page.$eval('#asof', e => e.textContent));
+    await t.ctx.close();
+    // With a token and today's prices: nothing is started.
+    t = await open({}, github); await t.page.addInitScript(seed(true));
+    await t.page.goto(BASE + '#transactions'); await t.page.waitForTimeout(1500);
+    check("Today's prices present: the job is not started", calls.length === 1, calls.length);
+    await t.ctx.close();
+    // A refused token: clear message.
+    reply = 401;
+    writePrices({ 'meta/refresh': { pricesAsOf: old.slice(0, 10), fetchedAt: old } }, { generatedAt: old });
+    t = await open({}, github); await t.page.addInitScript(seed(true));
+    await t.page.goto(BASE + '#transactions'); await t.page.waitForFunction(() => /refused the token/.test((document.querySelector('#sa-job') || {}).textContent || ''), null, { timeout: 8000 }).catch(() => {});
+    check('GitHub refuses the token: the panel says so', calls.length === 2 && /refused the token/.test(await t.page.$eval('#sa-job', e => e.textContent)), await t.page.$eval('#sa-job', e => e.textContent));
+    check('Starting the job: no errors', !t.errors.length, t.errors.length ? t.errors : 'none');
+    await t.ctx.close();
+    // lastDue(): the latest 6:53 in Belgium, in winter and in summer.
+    t = await open(); await t.page.goto(BASE); await t.page.waitForFunction(() => window.Standalone).catch(() => {});
+    const due = await t.page.evaluate(() => [Date.UTC(2026, 0, 15, 12), Date.UTC(2026, 0, 15, 5), Date.UTC(2026, 6, 15, 12)].map(n => new Date(window.Standalone.lastDue(n)).toISOString()));
+    check('Latest 6:53 Belgian time: 5:53 UTC in winter (same day / day before), 4:53 UTC in summer', JSON.stringify(due) === JSON.stringify(['2026-01-15T05:53:00.000Z', '2026-01-14T05:53:00.000Z', '2026-07-15T04:53:00.000Z']), due);
+    await t.ctx.close();
+  }
 
   // 7. Installable and usable offline: manifest, icons and the service worker.
   const three = await open({ serviceWorkers: 'allow' });
