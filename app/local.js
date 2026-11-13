@@ -1,5 +1,5 @@
-/* Portfolio Ledger as a standalone web app (no claude.ai).
-   This file gives the page what claude.ai gives the artifact: a database. Here it lives on this
+/* Portfolio Ledger as a standalone web app.
+   This file gives the page its database, which lives on this
    device only, in the browser's IndexedDB. It also downloads the encrypted prices file that the
    daily GitHub Actions job publishes next to the app, and adds a "This device" panel to the
    Transactions page: prices passphrase, refresh list, backup and restore.
@@ -70,7 +70,7 @@
   window.claude = {
     use: async name => {
       if (name === 'db') { try { await ready; return db; } catch { return null; } }
-      if (name === 'user') return { can: async () => true, isOwner: async () => false };
+      if (name === 'user') return { can: async () => true };
       return null;
     },
   };

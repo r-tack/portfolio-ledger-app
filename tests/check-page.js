@@ -1,7 +1,7 @@
 // End-to-end check of portfolio-ledger.html in a real browser, with a mocked, empty database.
 // Uses only the made-up exports in tests/fixtures (see make-fake-export.js), never real data.
-// Covers the empty state, the .xlsx and .csv imports, and starting the price refresh after an import
-// (the Claude Code Remote connector is mocked: nothing is sent anywhere).
+// Covers the empty state, and the .xlsx and .csv imports. The fake database has the same interface
+// as the app's on-device storage (app/local.js).
 //
 //   node tests/check-page.js
 //
@@ -26,26 +26,18 @@ const XL = process.env.XLSX_PATH || path.join(__dirname, 'node_modules', 'xlsx',
 for (const f of [PAGE_PATH, FIXTURE, FIXTURE_CSV, D3, XL]) if (!fs.existsSync(f)) { console.error('Missing ' + f); process.exit(2); }
 fs.mkdirSync(OUT, { recursive: true });
 
-// claude.ai wraps the published file in a document skeleton like this one.
+// app/build.py wraps the page in a full HTML document; a minimal one like it is enough here.
 const PAGE = '<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover">'
   + '<style>:root{color-scheme:light;box-sizing:border-box}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}'
   + 'img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>\n' + fs.readFileSync(PAGE_PATH, 'utf8') + '</body></html>';
 
 // A small in-memory stand-in for the artifact database: documents by path, live listeners,
 // and a log of every write. `mode` is 'db' (signed in), 'none' (no window.claude), 'null'
-// (use() gives nothing back) or 'throw' (use() refuses). `opts.owner` is what user.isOwner() says
-// (default true). `opts.mcp` stands in for the Claude Code Remote connector: 'ok' (default) answers
-// every call, an error code such as 'not_in_manifest' refuses it, null means no mcp capability.
-// Every connector call is logged in window.__mock.MCP.
-function mockScript(mode, seed, opts = {}) {
+// (use() gives nothing back) or 'throw' (use() refuses).
+function mockScript(mode, seed) {
   return `(() => {
-  const MODE = ${JSON.stringify(mode)}, OPTS = ${JSON.stringify(opts)};
+  const MODE = ${JSON.stringify(mode)};
   if (MODE === 'none') return;
-  const OWNER = OPTS.owner !== false, MCP_MODE = OPTS.mcp === undefined ? 'ok' : OPTS.mcp, MCP = [];
-  const mcp = MCP_MODE === null ? null : { callTool: async (server, tool, input) => {
-    MCP.push({ server, tool, input });
-    if (MCP_MODE !== 'ok') throw { code: MCP_MODE, message: 'refused by the test' };
-    return { content: [{ type: 'text', text: '{}' }], payload: {} }; } };
   const DOCS = ${JSON.stringify(seed || {})}, docL = new Map(), colL = new Map(), WRITES = [];
   const clone = x => x === undefined ? undefined : JSON.parse(JSON.stringify(x));
   const snapDoc = p => ({ id: p.split('/').pop(), exists: DOCS[p] !== undefined, data: () => clone(DOCS[p]), metadata: { fromCache: false, hasPendingWrites: false } });
@@ -60,11 +52,11 @@ function mockScript(mode, seed, opts = {}) {
     delete: async () => { delete DOCS[p]; WRITES.push('delete ' + p); changed(p); } });
   const db = { doc, collection: c => ({ doc: id => doc(c + '/' + id), onSnapshot: fn => listen(colL, c, fn, () => snapCol(c)),
     add: async d => { const p = c + '/auto-' + (++n); DOCS[p] = clone(d); WRITES.push('add ' + p); changed(p); return { id: p.split('/')[1] }; } }) };
-  window.__mock = { DOCS, WRITES, MCP, db };
+  window.__mock = { DOCS, WRITES, db };
   window.claude = { use: async name => {
     if (MODE === 'throw') throw new Error('capability not granted: ' + name);
     if (MODE === 'null') return null;
-    return name === 'db' ? db : name === 'user' ? { can: async () => true, isOwner: async () => OWNER } : name === 'mcp' ? mcp : null; } };
+    return name === 'db' ? db : name === 'user' ? { can: async () => true } : null; } };
 })();`;
 }
 
@@ -74,7 +66,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail }); 
 (async () => {
   const browser = await chromium.launch();
   const outside = new Set();
-  async function open({ mode = 'db', seed, mock, hash = '#overview', viewport = { width: 1280, height: 860 }, file = false, mobile = false } = {}) {
+  async function open({ mode = 'db', seed, hash = '#overview', viewport = { width: 1280, height: 860 }, file = false, mobile = false } = {}) {
     const ctx = await browser.newContext(mobile ? { viewport, deviceScaleFactor: 2, isMobile: true, hasTouch: true } : { viewport, deviceScaleFactor: 1 });
     const page = await ctx.newPage();
     const errors = [];
@@ -89,7 +81,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail }); 
       if (u.startsWith('https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/')) return r.fulfill({ path: XL, contentType: 'application/javascript' });
       return r.abort();
     });
-    if (!file) await page.addInitScript(mockScript(mode, seed, mock));
+    if (!file) await page.addInitScript(mockScript(mode, seed));
     await page.goto(file ? 'file://' + PAGE_PATH : 'http://local/index.html' + hash);
     return { ctx, page, errors };
   }
@@ -98,19 +90,19 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail }); 
   const docs = page => page.evaluate(() => JSON.parse(JSON.stringify(window.__mock.DOCS)));
   const settle = page => page.waitForTimeout(400);
 
-  // 1. Without the database capability: opened from disk, and on claude.ai without capabilities.
+  // 1. Without storage: opened from disk, and when the browser refuses its storage.
   {
     const { ctx, page, errors } = await open({ file: true });
-    const ok = await page.waitForSelector('text=Sign in to see your portfolio', { timeout: 5000 }).then(() => true, () => false);
+    const ok = await page.waitForSelector("text=Your portfolio can't be stored here", { timeout: 5000 }).then(() => true, () => false);
     await shot(page, '1-file-from-disk');
-    check('Opened from disk: shows "Sign in to see your portfolio"', ok);
+    check("Opened from disk: shows \"Your portfolio can't be stored here\"", ok);
     check('Opened from disk: no errors', !errors.length, errors.length ? errors : 'none');
     await ctx.close();
   }
   for (const mode of ['none', 'null', 'throw']) {
     const { ctx, page, errors } = await open({ mode });
-    const ok = await page.waitForSelector('text=Sign in to see your portfolio', { timeout: 5000 }).then(() => true, () => false);
-    check(`No database (${mode === 'none' ? 'no window.claude' : mode === 'null' ? 'use("db") gives nothing' : 'use("db") refuses'}): shows "Sign in to see your portfolio"`, ok,
+    const ok = await page.waitForSelector("text=Your portfolio can't be stored here", { timeout: 5000 }).then(() => true, () => false);
+    check(`No database (${mode === 'none' ? 'no window.claude' : mode === 'null' ? 'use("db") gives nothing' : 'use("db") refuses'}): shows "Your portfolio can't be stored here"`, ok,
       errors.length ? errors : undefined);
     await ctx.close();
   }
@@ -156,8 +148,8 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail }); 
     check('Stored import: period taken from the file name', imp.period && imp.period.from === '2026-01-01' && imp.period.to === '2026-06-30', imp.period);
     check('Stored import: date cells stored as dates', sh.Transacties && sh.Transacties.rows[0][0] === '2026-06-15' && sh._Transacties.rows[0][8] === '2026-05-20T15:42:00', [sh.Transacties && sh.Transacties.rows[0][0], sh._Transacties && sh._Transacties.rows[0][8]]);
     check('Never-import list now holds "Gebruikersnaam"', d['settings/columns'] && JSON.stringify(d['settings/columns'].exclude) === JSON.stringify({ main: ['Gebruikersnaam'] }), d['settings/columns'] && d['settings/columns'].exclude);
-    check('No settings/refresh: the price refresh is not started, prices follow at the next refresh',
-      !(await page.evaluate(() => window.__mock.MCP.length)) && /at the next price refresh\.$/.test(await page.$eval('#imp-status', e => e.textContent)), await page.$eval('#imp-status', e => e.textContent));
+    check('Import status says new instruments get prices at the next refresh',
+      /at the next price refresh\.$/.test(await page.$eval('#imp-status', e => e.textContent)), await page.$eval('#imp-status', e => e.textContent));
 
     // 4. What the imported data looks like on each page.
     const rows = await page.$$eval('.txrow', a => a.map(r => r.innerText.replace(/\s+/g, ' ').trim()));
@@ -210,55 +202,17 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail }); 
     await ctx.close();
   }
 
-  // 6. Price refresh right after an import: settings/refresh names the owner's scheduled task, and
-  //    the page starts it through the Claude Code Remote connector (mocked here; nothing is sent).
-  const TRIG = 'trig_0123456789abcdefTEST';
-  // The status line reads "Imported …" once the file is saved, and gains a sentence about the refresh once that is decided.
+  // The status line reads "Imported …" once the file is saved, then gains a sentence about the prices.
   const waitImported = page => page.waitForFunction(() => /^Imported .*refresh/.test((document.querySelector('#imp-status') || {}).textContent || ''), null, { timeout: 15000 }).catch(() => {});
-  {
-    const { ctx, page, errors } = await open({ seed: { 'settings/refresh': { trigger: TRIG } }, hash: '#transactions' });
-    await page.waitForSelector('#imp-btn', { timeout: 5000 }).catch(() => {}); await settle(page);
-    check('With settings/refresh: nothing is started before an import', !(await page.evaluate(() => window.__mock.MCP.length)));
-    await page.setInputFiles('#imp-file', FIXTURE); await waitImported(page); await settle(page);
-    const calls = await page.evaluate(() => window.__mock.MCP), status = await page.$eval('#imp-status', e => e.textContent).catch(() => '');
-    check('After the import: the scheduled task is started once, through Claude Code Remote fire_trigger',
-      calls.length === 1 && calls[0].server === 'Claude Code Remote' && calls[0].tool === 'fire_trigger' && calls[0].input.trigger_id === TRIG && Object.keys(calls[0].input).join() === 'trigger_id,text', calls);
-    check('Import status says the price refresh has started', status.includes('The price refresh has started.'), status);
-    const asof1 = await page.$eval('#asof', e => e.textContent);
-    await shot(page, '12-refresh-started');
-    check('Header: "Refreshing prices…" while the refresh runs', asof1 === 'Refreshing prices…', asof1);
-    // The refresh finishes: it writes meta/refresh, and the header shows the new prices date.
-    await page.evaluate(() => window.__mock.db.doc('meta/refresh').set({ pricesAsOf: new Date().toISOString().slice(0, 10), fetchedAt: new Date().toISOString().replace(/\.\d+Z$/, 'Z'), source: 'Yahoo Finance (daily closes)' }));
-    await settle(page);
-    const asof2 = await page.$eval('#asof', e => e.textContent);
-    check('Header: shows the new prices date once the refresh has written meta/refresh', /^Prices /.test(asof2), asof2);
-    check('Price refresh after import: no errors', !errors.length, errors.length ? errors : 'none');
-    await ctx.close();
-  }
-  for (const [label, mock, expectCalls, expectText] of [
-    ['connector not allowed for the page', { mcp: 'not_in_manifest' }, 1, "Claude Code Remote isn't allowed for this page"],
-    ['connector not connected', { mcp: 'server_not_connected' }, 1, "Claude Code Remote isn't connected"],
-    ['page published without the mcp capability', { mcp: null }, 0, "This page isn't allowed to use Claude Code Remote"],
-    ['an editor who is not the owner', { owner: false }, 0, 'at the next price refresh.'],
-  ]) {
-    const { ctx, page, errors } = await open({ seed: { 'settings/refresh': { trigger: TRIG } }, mock, hash: '#transactions' });
-    await page.waitForSelector('#imp-btn', { timeout: 5000 }).catch(() => {}); await settle(page);
-    await page.setInputFiles('#imp-file', FIXTURE); await waitImported(page); await settle(page);
-    const calls = await page.evaluate(() => window.__mock.MCP.length), status = await page.$eval('#imp-status', e => e.textContent).catch(() => '');
-    const asof = await page.$eval('#asof', e => e.textContent), saved = Object.keys(await docs(page)).some(k => k.startsWith('imports/'));
-    check(`Refresh not started (${label}): import saved, ${expectCalls ? 'one refused call' : 'no call'}, clear message, no "Refreshing"`,
-      saved && calls === expectCalls && status.includes(expectText) && /next price refresh\.$/.test(status) && asof !== 'Refreshing prices…' && !errors.length, { calls, status, asof, errors });
-    await ctx.close();
-  }
 
-  // 7. The same made-up export as a CSV file (semicolons, 05-01-2026 dates, amounts like 10.000,00).
+  // 6. The same made-up export as a CSV file (semicolons, 05-01-2026 dates, amounts like 10.000,00).
   {
-    const { ctx, page, errors } = await open({ seed: { 'settings/refresh': { trigger: TRIG } }, hash: '#transactions' });
+    const { ctx, page, errors } = await open({ hash: '#transactions' });
     await page.waitForSelector('#imp-btn', { timeout: 5000 }).catch(() => {}); await settle(page);
     await page.setInputFiles('#imp-file', FIXTURE_CSV); await waitImported(page); await settle(page);
     const status = await page.$eval('#imp-status', e => e.textContent).catch(() => '');
     const d = await docs(page), imp = d[Object.keys(d).find(k => k.startsWith('imports/'))] || {}, sh = Object.values(imp.sheets || {})[0] || { columns: [], rows: [] };
-    check('CSV import finishes and starts the price refresh', /^Imported .*\.csv\./.test(status) && status.includes('The price refresh has started.') && (await page.evaluate(() => window.__mock.MCP.length)) === 1, status);
+    check('CSV import finishes', /^Imported .*\.csv\./.test(status), status);
     check('CSV: one sheet with all 6 rows, period from the file name', sh.rows.length === 6 && imp.period && imp.period.from === '2026-01-01' && imp.period.to === '2026-06-30', { rows: sh.rows.length, period: imp.period });
     check('CSV: empty columns are kept (a CSV cannot tell cleared from empty), nothing added to never-import', sh.columns.includes('Gebruikersnaam') && sh.rows.every(r => r[sh.columns.indexOf('Gebruikersnaam')] == null) && !d['settings/columns'], sh.columns.length + ' columns');
     const rows = await page.$$eval('.txrow', a => a.map(r => r.innerText.replace(/\s+/g, ' ').trim()));
@@ -271,7 +225,7 @@ const check = (name, ok, detail) => { results.push({ name, ok: !!ok, detail }); 
     await ctx.close();
   }
 
-  // 8. Phone width: empty state and import screen fit without sideways scrolling.
+  // 7. Phone width: empty state and import screen fit without sideways scrolling.
   {
     const { ctx, page, errors } = await open({ viewport: { width: 390, height: 844 }, mobile: true });
     await page.waitForSelector('text=No transactions yet', { timeout: 5000 }).catch(() => {}); await settle(page);

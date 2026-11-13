@@ -1,5 +1,0 @@
-{
-  "permissions": {
-    "allow": ["ArtifactData", "Bash(python3 -I *)"]
-  }
-}

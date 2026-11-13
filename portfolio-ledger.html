@@ -1,4 +1,4 @@
-<!-- Portfolio Ledger: a personal investment tracker. Runs as a claude.ai artifact, or standalone (app/).
+<!-- Portfolio Ledger: a personal investment tracker. app/build.py turns this page into the installable app.
      See README.md for how to publish your own copy and how to adapt the Excel import. -->
 <title>Portfolio Ledger</title>
 <meta name="claude:viewport-fit-sides" content="cover">
@@ -1053,7 +1053,7 @@ function render() {
 }
 function renderNoDb() {
   const v = $('#view-overview'); v.hidden = false; $('#view-loading').hidden = true;
-  v.innerHTML = `<div class="panel empty"><h2>Sign in to see your portfolio</h2><p>This tracker keeps your transactions and prices in its own private database on claude.ai. Open it while signed in to load them.</p></div>`;
+  v.innerHTML = `<div class="panel empty"><h2>Your portfolio can't be stored here</h2><p>The app keeps your transactions in this browser's own storage, and the browser refused it. Private browsing or blocked website data can cause this. Open the app from its icon, or in a normal browser window.</p></div>`;
 }
 function renderEmpty(v) {
   v.innerHTML = `<div class="panel empty"><h2>No transactions yet</h2><p>Import your broker's transaction export (.xlsx or .csv) on the Transactions page. Columns that are empty in the file are dropped before anything is saved.</p><button class="btn primary" id="go-import">Go to Transactions</button></div>`;
@@ -1966,7 +1966,7 @@ async function importFile(file) {
   if (S.ui.route !== 'transactions') go('transactions');
   store.set('impOpen', true);
   const status = t => { S.ui.impStatus = t; const st = $('#imp-status'); if (st) st.textContent = t; else toast(t); };
-  if (!S.db) { toast('Sign in on claude.ai to import.'); return; }
+  if (!S.db) { toast("Your portfolio can't be stored in this browser."); return; }
   if (S.readOnly) { toast('You can view this tracker but not import into it.'); return; }
   const csv = /\.csv$/i.test(file.name);
   if (!csv && !/\.xlsx?$/i.test(file.name)) { status('That file is not an Excel (.xlsx) or CSV (.csv) export. Export your transactions from the broker as Excel or CSV and try again.'); return; }
@@ -1998,40 +1998,13 @@ async function importFile(file) {
     msg = `Imported ${file.name}. Left out ${totalDropped} column${totalDropped === 1 ? '' : 's'}: ${Object.values(dropped).flat().join(', ') || 'none'}.${fresh.length ? ` ${fresh.length} newly blanked column${fresh.length === 1 ? ' was' : 's were'} added to the never-import list.` : ''}`;
     status(msg);
   } catch (e) { writeFailed(e); status("The import wasn't saved."); return; }
-  const r = await startRefresh().catch(() => ({ toast: 'Import saved.', status: REFRESH_LATER }));
-  status(`${msg} ${r.status}`); toast(r.toast);
+  status(`${msg} ${REFRESH_LATER}`); toast('Import saved.');
 }
 
-/* ---------- price refresh right after an import ----------
-   settings/refresh { trigger: "trig_..." } names the owner's price-refresh scheduled task. After each
-   import, the owner's page starts that task through the Claude Code Remote connector (the "mcp"
-   capability), so new instruments get prices and logos within minutes, not at the next scheduled run.
-   Without that document, or for anyone but the owner, prices follow at the next price refresh. */
-const REFRESH_SERVER = 'Claude Code Remote';
+/* Shown under an import; the standalone app (app/local.js) gives its own sentence. While a
+   price refresh runs, the header says "Refreshing prices…" for at most REFRESH_WAIT. */
 const REFRESH_WAIT = 30 * 60e3;
-/* window.Standalone exists only in the standalone web app (app/local.js), where a GitHub Actions job fetches the prices. */
-const REFRESH_LATER = window.Standalone ? window.Standalone.afterImport : 'New instruments get prices and logos at the next price refresh.';
-async function startRefresh() {
-  const trig = String((S.refreshCfg && S.refreshCfg.trigger) || '');
-  if (!/^trig_[A-Za-z0-9]+$/.test(trig) || !S.isOwner) return { toast: 'Import saved.', status: REFRESH_LATER };
-  let mcp = null; try { mcp = await window.claude.use('mcp'); } catch {}
-  if (!mcp) return { toast: 'Import saved. Price refresh not started.', status: `This page isn't allowed to use ${REFRESH_SERVER}, so the price refresh wasn't started. ${REFRESH_LATER}` };
-  toast('Import saved. Starting the price refresh…');
-  try {
-    await mcp.callTool(REFRESH_SERVER, 'fire_trigger', { trigger_id: trig, text: 'Started from the tracker page right after a new import, not by the schedule.' });
-    S.refreshStarted = Date.now(); setTimeout(scheduleRender, REFRESH_WAIT + 1000); scheduleRender();
-    return { toast: 'Import saved. Price refresh started.', status: 'The price refresh has started. New prices and logos usually appear within a few minutes.' };
-  } catch (e) {
-    const c = e && e.code;
-    const why = c === 'server_not_connected' ? `${REFRESH_SERVER} isn't connected to your claude.ai account (Settings → Connectors), so the price refresh wasn't started.`
-      : c === 'needs_reauth' ? `Reconnect ${REFRESH_SERVER} in claude.ai Settings → Connectors: the price refresh wasn't started.`
-      : ['not_in_manifest', 'approval_required', 'consent_required', 'not_granted', 'capability_disabled', 'blocked_by_policy'].includes(c) ? `${REFRESH_SERVER} isn't allowed for this page, so the price refresh wasn't started.`
-      : c === 'tool_error' ? "The price refresh scheduled task couldn't be started. Check that it still exists in Claude Code."
-      : c === 'server_unavailable' || c === 'upstream_error' || c === 'cancelled' ? "It isn't clear whether the price refresh started; if it did, new prices appear within a few minutes."
-      : "The price refresh couldn't be started.";
-    return { toast: 'Import saved. Price refresh not started.', status: `${why} ${REFRESH_LATER}` };
-  }
-}
+const REFRESH_LATER = window.Standalone ? window.Standalone.afterImport : 'New instruments get prices at the next price refresh.';
 
 /* ---------- data wiring ---------- */
 function subscribe() {
@@ -2047,7 +2020,6 @@ function subscribe() {
   db.doc('settings/strategies').onSnapshot(s => { S.strategies = s.exists ? (s.data().map || {}) : {}; S.dirty = true; scheduleRender(); }, () => {});
   db.doc('settings/columns').onSnapshot(s => { S.columns = s.exists ? s.data() : null; scheduleRender(); }, () => {});
   db.doc('settings/catalog').onSnapshot(s => { S.catalog = s.exists ? (s.data().items || []) : []; scheduleRender(); }, () => {});
-  db.doc('settings/refresh').onSnapshot(s => { S.refreshCfg = s.exists ? s.data() : null; }, () => {});
   db.doc('meta/refresh').onSnapshot(s => { S.meta = s.exists ? s.data() : null; S.dirty = true; scheduleRender(); }, () => {});
   db.collection('requests').onSnapshot(snap => { S.requests = snap.docs.map(d => Object.assign({ __id: d.id }, d.data())); scheduleRender(); }, () => {});
 }
@@ -2061,7 +2033,6 @@ readRoute(); render();
   S.db = db; subscribe();
   if (window.Standalone) window.Standalone.init({ S, C, getModel, toast, scheduleRender, esc });
   try { const u = window.claude && await window.claude.use('user'); if (u) { const can = await u.can('data.write'); if (can === false) { S.readOnly = true; scheduleRender(); } } } catch {}
-  try { const u = window.claude && await window.claude.use('user'); S.isOwner = !!(u && typeof u.isOwner === 'function' && await u.isOwner()); } catch {}
 })();
 })();
 </script>
